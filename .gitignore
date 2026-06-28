@@ -1,0 +1,13 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Generated proto files are committed (shadow/proto/*_pb2.py).
+# Regenerate with: uv run --extra dev python scripts/compile_protos.py

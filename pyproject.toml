@@ -1,0 +1,23 @@
+[project]
+name = "shadow"
+version = "0.1.0"
+description = "Library and tools for reading Light L16 LRI camera files"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "protobuf>=5.0",
+    "Pillow>=10.0",
+    "numpy>=1.26",
+    "click>=8.1",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = ["grpcio-tools>=1.50"]
+
+[project.scripts]
+shadow = "shadow.cli.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
