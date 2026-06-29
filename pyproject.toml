@@ -14,6 +14,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["grpcio-tools>=1.50"]
+# High-quality Bayer demosaicing algorithms (Malvar2004, Menon2007, DDFAPD).
+# Pulls in colour-science and scipy (~50 MB).
+demosaic = ["colour-demosaicing>=0.2.7"]
 
 [project.scripts]
 shadow = "shadow.cli.main:cli"

@@ -1,11 +1,46 @@
-"""Bayer demosaicing — numpy only, no OpenCV dependency.
+"""Bayer demosaicing — numpy-native algorithms plus optional colour-demosaicing backends.
 
-Both functions accept a raw uint16 Bayer array (height, width) and the
-R pixel position (r_row, r_col) within the 2×2 CFA tile.
+Built-in functions (debayer_half, debayer_bilinear) have no external dependencies
+beyond numpy and are always available.
+
+Higher-quality algorithms (Malvar2004, Menon2007, DDFAPD) are available when
+the ``colour-demosaicing`` package is installed (``pip install shadow[demosaic]``).
+Pass a DemosaicKernel to to_debayered_numpy() or the export functions to select one.
 """
 from __future__ import annotations
 
+from enum import Enum
+
 import numpy as np
+
+
+class DemosaicKernel(str, Enum):
+    """Demosaicing algorithm selector.
+
+    Built-in (no extra deps):
+      HALF       — fast half-resolution subsampling (good for previews)
+      BILINEAR   — full-resolution bilinear (default)
+
+    Requires colour-demosaicing (``pip install shadow[demosaic]``):
+      MALVAR     — Malvar-He-Cutler 2004 (fast, high quality; recommended upgrade)
+      MENON      — Menon et al. 2007 (slower, fewer colour fringing artefacts)
+      DDFAPD     — Adaptive Directed interpolation (highest quality, slowest)
+    """
+
+    HALF = "half"
+    BILINEAR = "bilinear"
+    MALVAR = "malvar"
+    MENON = "menon"
+    DDFAPD = "ddfapd"
+
+
+# Maps (r_row, r_col) to the CFA pattern strings used by colour-demosaicing.
+_CFA_STR: dict[tuple[int, int], str] = {
+    (0, 0): "RGGB",
+    (0, 1): "GRBG",
+    (1, 0): "GBRG",
+    (1, 1): "BGGR",
+}
 
 
 def debayer_half(bayer: np.ndarray, r_row: int, r_col: int) -> np.ndarray:
@@ -91,6 +126,46 @@ def debayer_bilinear(bayer: np.ndarray, r_row: int, r_col: int) -> np.ndarray:
         )
 
     return np.stack([R, G, B], axis=2)
+
+
+def debayer_colour(
+    bayer: np.ndarray,
+    r_row: int,
+    r_col: int,
+    kernel: DemosaicKernel = DemosaicKernel.MALVAR,
+) -> np.ndarray:
+    """Demosaic using a colour-demosaicing algorithm.
+
+    Requires ``pip install shadow[demosaic]`` (colour-demosaicing package).
+
+    Returns float32 (H, W, 3) with the same value range as the input.
+    """
+    try:
+        import colour_demosaicing as cd
+    except ImportError as exc:
+        raise ImportError(
+            f"kernel={kernel.value!r} requires colour-demosaicing: "
+            "pip install 'shadow[demosaic]'"
+        ) from exc
+
+    pattern = _CFA_STR.get((r_row, r_col))
+    if pattern is None:
+        raise ValueError(f"Unknown Bayer pattern: r_row={r_row}, r_col={r_col}")
+
+    # colour-demosaicing works in float64; input should already be float32.
+    cfa = bayer.astype(np.float64)
+
+    match kernel:
+        case DemosaicKernel.MALVAR:
+            rgb = cd.demosaicing_CFA_Bayer_Malvar2004(cfa, pattern)
+        case DemosaicKernel.MENON:
+            rgb = cd.demosaicing_CFA_Bayer_Menon2007(cfa, pattern)
+        case DemosaicKernel.DDFAPD:
+            rgb = cd.demosaicing_CFA_Bayer_DDFAPD(cfa, pattern)
+        case _:  # pragma: no cover
+            raise ValueError(f"Not a colour-demosaicing kernel: {kernel!r}")
+
+    return rgb.astype(np.float32)
 
 
 def _roll_row(arr: np.ndarray, shift: int) -> np.ndarray:

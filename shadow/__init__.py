@@ -13,6 +13,7 @@ Quick start::
     lris = shadow.open_lris("photo.lris")
     print(lris.depth_map.shape)
 """
+from shadow._debayer import DemosaicKernel
 from shadow._lri import LriFile
 from shadow._lris import LrisFile
 from shadow._image import RawImage
@@ -41,6 +42,8 @@ __all__ = [
     "open_lris",
     # Image class
     "RawImage",
+    # Demosaicing
+    "DemosaicKernel",
     # Enums and data types
     "CameraId",
     "SensorModel",
