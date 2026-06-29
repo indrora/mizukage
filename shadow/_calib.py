@@ -228,6 +228,122 @@ def load_vst_model(calib_dir: Path) -> list[VSTEntry]:
     return []
 
 
+# ── Vignetting correction ──────────────────────────────────────────────────────
+
+def load_vignetting_grid(calib_dir: Path, camera_id: CameraId) -> np.ndarray | None:
+    """Load the factory vignetting correction grid for one camera.
+
+    Returns float32 (13, 17) array where each value is a multiplicative
+    correction factor (1.0 = no correction, ~3.75 at corners).
+    Returns None if calibration.lri is absent or has no entry for this camera.
+
+    For cameras with multiple hall-code entries (movable-mirror C-array),
+    returns the first entry (hall_code closest to 0 / rest position).
+    """
+    calib_path = calib_dir / "calibration.lri"
+    if not calib_path.exists():
+        return None
+
+    from shadow._block import iter_blocks, BlockType
+    import shadow._proto as _proto
+
+    try:
+        data = calib_path.read_bytes()
+    except OSError:
+        return None
+
+    for block_start, hdr in iter_blocks(data):
+        if hdr.msg_type != BlockType.LIGHT_HEADER:
+            continue
+        proto_bytes = data[
+            block_start + hdr.msg_offset :
+            block_start + hdr.msg_offset + hdr.msg_len
+        ]
+        if not proto_bytes:
+            continue
+        try:
+            lh = _proto.parse_light_header(proto_bytes)
+        except Exception:
+            continue
+
+        for mc in lh.module_calibration:
+            # mc.camera_id is an integer matching the CameraId IntEnum values.
+            if int(mc.camera_id) != int(camera_id):
+                continue
+            if not mc.HasField("vignetting"):
+                continue
+
+            # mc.vignetting is a VignettingCharacterization;
+            # mc.vignetting.vignetting is a repeated MirrorVignettingModel.
+            mirror_vigs = list(mc.vignetting.vignetting)
+            if not mirror_vigs:
+                continue
+
+            # Use the first entry (hall_code=0 / rest position for C-array cameras;
+            # fixed cameras have exactly one entry).
+            mv = mirror_vigs[0]
+            vm = mv.vignetting  # VignettingModel
+            w = int(vm.width)
+            h = int(vm.height)
+            raw_data = list(vm.data)
+
+            if w <= 0 or h <= 0 or len(raw_data) != w * h:
+                continue
+
+            grid = np.array(raw_data, dtype=np.float32).reshape(h, w)
+            return grid
+
+    return None
+
+
+def apply_vignetting_correction(bayer_f32: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    """Multiply a float32 Bayer array by a bilinearly-interpolated vignetting grid.
+
+    bayer_f32: float32 (H, W) — Bayer plane, already converted to float
+    grid:      float32 (grid_h, grid_w) — correction factors from load_vignetting_grid
+
+    The grid covers the full sensor; it is stretched to match (H, W) using
+    bilinear interpolation via scipy.ndimage.zoom when available, or a
+    pure-numpy 2-axis linear interpolation otherwise.
+
+    Returns a new float32 array of the same shape.
+    """
+    H, W = bayer_f32.shape
+    grid_h, grid_w = grid.shape
+
+    # Fast path: no rescaling needed (grid already matches sensor size).
+    if grid_h == H and grid_w == W:
+        return bayer_f32 * grid
+
+    # Preferred path: scipy zoom (bilinear, order=1).
+    try:
+        from scipy.ndimage import zoom as _zoom
+        scale_h = H / grid_h
+        scale_w = W / grid_w
+        correction = _zoom(grid, (scale_h, scale_w), order=1)
+    except ImportError:
+        # Fallback: pure-numpy bilinear stretch via np.interp applied axis-by-axis.
+        # 1. Stretch rows: interpolate each column along the H axis.
+        row_coords = np.linspace(0.0, grid_h - 1, H)
+        col_coords = np.linspace(0.0, grid_w - 1, W)
+
+        # Interpolate along axis 0 (rows) for each column.
+        grid_row_idx = np.arange(grid_h, dtype=np.float32)
+        stretched_rows = np.stack(
+            [np.interp(row_coords, grid_row_idx, grid[:, c]) for c in range(grid_w)],
+            axis=1,
+        )  # shape: (H, grid_w)
+
+        # Interpolate along axis 1 (cols) for each row of the row-stretched result.
+        grid_col_idx = np.arange(grid_w, dtype=np.float32)
+        correction = np.stack(
+            [np.interp(col_coords, grid_col_idx, stretched_rows[r, :]) for r in range(H)],
+            axis=0,
+        )  # shape: (H, W)
+
+    return bayer_f32 * correction.astype(np.float32)
+
+
 def compute_scalar_sigma(
     vst_model: list[VSTEntry],
     analog_gain: float,
