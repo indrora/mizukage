@@ -151,7 +151,12 @@ def _tile_denoise(
     _, C, H, W = t.shape
     step = tile - overlap
     half = overlap // 2
-    out = torch.zeros_like(t)
+
+    # Accumulate on CPU regardless of the inference device.  Non-contiguous
+    # slice assignment into a device tensor (e.g. DirectML on AMD/Intel) can
+    # silently fail for certain index patterns, leaving strips of zeros.
+    # Reading patches FROM the device tensor is fine; only writes are unsafe.
+    out = torch.zeros(1, C, H, W, dtype=torch.float32)
 
     for wy0 in range(0, H, step):
         wy1 = min(wy0 + step, H)
@@ -165,10 +170,10 @@ def _tile_denoise(
 
             patch = t[:, :, ty0:ty1, tx0:tx1]
             p_out = model_fn(patch)
-            out[:, :, wy0:wy1, wx0:wx1] = p_out[:, :, ry0:ry1, rx0:rx1]
+            out[:, :, wy0:wy1, wx0:wx1] = p_out[:, :, ry0:ry1, rx0:rx1].cpu()
             _done()
 
-    return out
+    return out  # CPU tensor; caller does .cpu().numpy() which is then a no-op
 
 
 def denoise_image(
