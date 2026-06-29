@@ -77,29 +77,14 @@ def update(data: "CalibData", camera: str) -> None:
             no_mouse_pos=True,
             no_title=False,
         ) as hp_plot:
-            dpg.add_plot_axis(
-                dpg.mvXAxis,
-                label=f"col (0-{_GRID_W-1})",
-                no_gridlines=True,
-                lock_min=True,
-                lock_max=True,
-            )
-            with dpg.plot_axis(
-                dpg.mvYAxis,
-                label=f"row (0-{_GRID_H-1})",
-                no_gridlines=True,
-                lock_min=True,
-                lock_max=True,
-                invert=True,
-            ):
+            dpg.add_plot_axis(dpg.mvXAxis, no_gridlines=True)
+            with dpg.plot_axis(dpg.mvYAxis, no_gridlines=True, invert=True):
                 dpg.add_heat_series(
                     grid.flatten().tolist(),
                     rows=_GRID_H,
                     cols=_GRID_W,
                     scale_min=lo,
                     scale_max=hi,
-                    bounds_min=(0, 0),
-                    bounds_max=(_GRID_W, _GRID_H),
                 )
         dpg.bind_colormap(hp_plot, dpg.mvPlotColormap_Plasma)
 

@@ -80,27 +80,15 @@ def update(data: "CalibData", camera: str) -> None:
                     width=-1,
                     no_mouse_pos=True,
                     no_title=False,
-                ):
-                    dpg.add_plot_axis(
-                        dpg.mvXAxis,
-                        label=f"col (0–{w-1})",
-                        no_gridlines=True,
-                        lock_min=True, lock_max=True,
-                    )
-                    with dpg.plot_axis(
-                        dpg.mvYAxis,
-                        label=f"row (0–{h-1})",
-                        no_gridlines=True,
-                        lock_min=True, lock_max=True,
-                        invert=True,
-                    ):
+                ) as vig_plot:
+                    dpg.add_plot_axis(dpg.mvXAxis, no_gridlines=True)
+                    with dpg.plot_axis(dpg.mvYAxis, no_gridlines=True, invert=True):
                         dpg.add_heat_series(
                             vals,
                             rows=h, cols=w,
                             scale_min=lo, scale_max=hi,
-                            bounds_min=(0, 0),
-                            bounds_max=(w, h),
                         )
+                dpg.bind_colormap(vig_plot, dpg.mvPlotColormap_Viridis)
 
                 dpg.add_colormap_scale(
                     colormap=dpg.mvPlotColormap_Viridis,
