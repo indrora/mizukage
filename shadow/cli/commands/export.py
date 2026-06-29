@@ -18,6 +18,7 @@ from rich.progress import (
 from rich.table import Column
 
 import shadow
+from shadow._calib import compute_scalar_sigma, load_vst_model
 from shadow._debayer import DemosaicKernel
 from shadow._denoise import DenoiseKernel
 from shadow._types import AwbGains, CameraId
@@ -206,8 +207,9 @@ _GAMMA = _GammaParamType()
     default=None,
     metavar="DIR",
     help=(
-        "Path to a lightcal directory. When provided, hot-pixel maps from "
-        "hotpixel.rec are applied to each camera before demosaicing."
+        "Path to a Light L16 lightcal directory. When provided: hot-pixel maps "
+        "from hotpixel.rec are applied before demosaicing; when combined with "
+        "--denoise, the factory VST noise model sets per-camera sigma automatically."
     ),
 )
 def export(
@@ -265,6 +267,19 @@ def export(
     demosaic_kernel = DemosaicKernel(kernel)
     denoise = DenoiseKernel(denoise_kernel) if denoise_kernel else None
 
+    # Load the factory VST noise model when a calibration directory is provided
+    # alongside a denoising kernel.  An empty list means "model unavailable".
+    vst_model = (
+        load_vst_model(Path(calib_dir))
+        if calib_dir is not None and denoise is not None
+        else []
+    )
+    if calib_dir is not None and denoise is not None and not vst_model:
+        console.print(
+            "[yellow]Warning: no VST model found in calibration directory; "
+            "falling back to --denoise-sigma.[/yellow]"
+        )
+
     # Build AWB gains override if either channel was specified explicitly.
     awb_override: AwbGains | None = None
     if apply_awb and (awb_r is not None or awb_b is not None):
@@ -308,6 +323,19 @@ def export(
             name = img.camera_id.name
             dest = out / f"{name}{suffix}{ext}"
 
+            # When the factory VST noise model is available, use it to derive
+            # a per-camera sigma from the actual capture analog gain.  This is
+            # more accurate than the user-supplied scalar because it accounts
+            # for the sensor's measured shot-noise and read-noise coefficients.
+            effective_sigma = denoise_sigma
+            if vst_model and denoise is not None:
+                effective_sigma = compute_scalar_sigma(vst_model, img.analog_gain)
+                console.print(
+                    f"  [dim]Using VST sigma={effective_sigma:.3f} "
+                    f"for camera {name} "
+                    f"(analog_gain={img.analog_gain:.2f})[/dim]"
+                )
+
             # Pre-compute the exact number of progress advances for this image
             # so the per-image bar shows a real fraction rather than a pulse.
             total_steps = _image_steps(img, half_res, raw, denoise, denoise_tile_size)
@@ -334,7 +362,7 @@ def export(
                 apply_ccm=apply_ccm, kernel=demosaic_kernel,
                 gamma=gamma, exposure=exposure,
                 apply_orientation=apply_orientation,
-                denoise=denoise, denoise_sigma=denoise_sigma,
+                denoise=denoise, denoise_sigma=effective_sigma,
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
                 hot_pixel_map=hot_pixel_map,
