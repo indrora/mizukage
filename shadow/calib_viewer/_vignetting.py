@@ -72,21 +72,24 @@ def update(data: "CalibData", camera: str) -> None:
             lo = min(vals)
             hi = max(vals)
 
+            _PLOT_H = 350
+            _PLOT_W = int(_PLOT_H * w / h)  # maintain grid aspect ratio
+
             dpg.delete_item("vig_content", children_only=True)
             with dpg.group(horizontal=True, parent="vig_content"):
                 with dpg.plot(
-                    label=f"{camera} — {label}",
-                    height=350,
-                    width=-1,
+                    label=f"{camera} - {label}",
+                    height=_PLOT_H,
+                    width=_PLOT_W,
                     no_mouse_pos=True,
-                    no_title=False,
                 ) as vig_plot:
-                    dpg.add_plot_axis(dpg.mvXAxis, no_gridlines=True)
-                    with dpg.plot_axis(dpg.mvYAxis, no_gridlines=True, invert=True):
+                    dpg.add_plot_axis(dpg.mvXAxis, no_gridlines=True, no_tick_labels=True)
+                    with dpg.plot_axis(dpg.mvYAxis, no_gridlines=True, no_tick_labels=True, invert=True):
                         dpg.add_heat_series(
                             vals,
                             rows=h, cols=w,
                             scale_min=lo, scale_max=hi,
+                            format="",
                         )
                 dpg.bind_colormap(vig_plot, dpg.mvPlotColormap_Viridis)
 

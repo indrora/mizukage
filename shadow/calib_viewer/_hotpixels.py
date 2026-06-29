@@ -69,22 +69,25 @@ def update(data: "CalibData", camera: str) -> None:
     grid = _density_grid(bitmap)
     lo, hi = float(grid.min()), float(grid.max())
 
+    _PLOT_H = 400
+    _PLOT_W = int(_PLOT_H * _GRID_W / _GRID_H)  # maintain 4:3 sensor aspect ratio
+
     with dpg.group(horizontal=True, parent=_TAG_GROUP):
         with dpg.plot(
-            label=f"Defect density — {camera}",
-            height=360,
-            width=-80,
+            label=f"Defect density - {camera}",
+            height=_PLOT_H,
+            width=_PLOT_W,
             no_mouse_pos=True,
-            no_title=False,
         ) as hp_plot:
-            dpg.add_plot_axis(dpg.mvXAxis, no_gridlines=True)
-            with dpg.plot_axis(dpg.mvYAxis, no_gridlines=True, invert=True):
+            dpg.add_plot_axis(dpg.mvXAxis, no_gridlines=True, no_tick_labels=True)
+            with dpg.plot_axis(dpg.mvYAxis, no_gridlines=True, no_tick_labels=True, invert=True):
                 dpg.add_heat_series(
                     grid.flatten().tolist(),
                     rows=_GRID_H,
                     cols=_GRID_W,
                     scale_min=lo,
                     scale_max=hi,
+                    format="",
                 )
         dpg.bind_colormap(hp_plot, dpg.mvPlotColormap_Plasma)
 
@@ -92,7 +95,7 @@ def update(data: "CalibData", camera: str) -> None:
             colormap=dpg.mvPlotColormap_Plasma,
             min_scale=lo,
             max_scale=hi,
-            height=360,
+            height=_PLOT_H,
             width=70,
         )
 
