@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image as PILImage
 
 from shadow._debayer import DemosaicKernel
-from shadow._denoise import DenoiseKernel
+from shadow._denoise import DenoiseKernel, DenoiseFn
 from shadow._types import (
     AwbGains,
     BayerPattern,
@@ -260,7 +260,7 @@ class RawImage:
         gamma: bool | float,
         exposure: float,
         apply_orientation: bool,
-        denoise: DenoiseKernel | None = None,
+        denoise: DenoiseKernel | DenoiseFn | None = None,
         denoise_sigma: float = 0.05,
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
@@ -282,7 +282,14 @@ class RawImage:
         normalized = (rgb / white).astype(np.float32)
         _adv(1)
         if denoise is not None:
-            _step(f"denoising ({denoise.value})")
+            # Use the enum's value string for built-in kernels; fall back to
+            # the function's __name__ (or "custom") for user-supplied callables.
+            denoise_label = (
+                denoise.value
+                if isinstance(denoise, DenoiseKernel)
+                else getattr(denoise, "__name__", "custom")
+            )
+            _step(f"denoising ({denoise_label})")
             from shadow._denoise import denoise_image
             # Clip before denoising: values must be in [0, 1] for BM3D.
             np.clip(normalized, 0.0, 1.0, out=normalized)
@@ -327,7 +334,7 @@ class RawImage:
         gamma: bool | float = True,
         exposure: float = 0.0,
         apply_orientation: bool = True,
-        denoise: DenoiseKernel | None = None,
+        denoise: DenoiseKernel | DenoiseFn | None = None,
         denoise_sigma: float = 0.05,
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
@@ -398,7 +405,7 @@ class RawImage:
         gamma: bool | float = True,
         exposure: float = 0.0,
         apply_orientation: bool = True,
-        denoise: DenoiseKernel | None = None,
+        denoise: DenoiseKernel | DenoiseFn | None = None,
         denoise_sigma: float = 0.05,
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
