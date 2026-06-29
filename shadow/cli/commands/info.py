@@ -35,55 +35,12 @@ def info(file: str, blocks: bool, cameras: bool, as_json: bool) -> None:
 
 
 def _info_lri(path: Path, show_blocks: bool, show_cameras: bool, as_json: bool) -> None:
+    if as_json:
+        _info_lri_json(path)
+        return
+
     lri = shadow.open_lri(str(path))
     meta = lri.metadata
-
-    if as_json:
-        gps_dict = None
-        if meta.gps:
-            gps_dict = {
-                "latitude": meta.gps.latitude,
-                "longitude": meta.gps.longitude,
-                "altitude_m": meta.gps.altitude_m,
-                "heading": meta.gps.heading,
-                "speed": meta.gps.speed,
-            }
-
-        data = {
-            "file": str(path),
-            "size_bytes": path.stat().st_size,
-            "image_count": len(lri.images),
-            "focal_length_mm": meta.focal_length_mm,
-            "reference_camera": meta.reference_camera.name if meta.reference_camera else None,
-            "device_model": meta.device_model,
-            "firmware_version": meta.firmware_version,
-            "hdr_mode": meta.hdr_mode.name if meta.hdr_mode else None,
-            "scene_mode": meta.scene_mode.name if meta.scene_mode else None,
-            "awb_mode": meta.awb_mode.name if meta.awb_mode else None,
-            "awb_gains": {
-                "r": meta.awb_gains.r,
-                "gr": meta.awb_gains.gr,
-                "gb": meta.awb_gains.gb,
-                "b": meta.awb_gains.b,
-            } if meta.awb_gains else None,
-            "on_tripod": meta.on_tripod,
-            "gps": gps_dict,
-            "cameras": [
-                {
-                    "camera_id": img.camera_id.name,
-                    "sensor": img.sensor_model.name,
-                    "width": img.width,
-                    "height": img.height,
-                    "format": img.raw_format.name,
-                    "cfa": img.cfa_pattern.name if img.cfa_pattern else None,
-                    "exposure_ms": img.exposure_ms,
-                    "analog_gain": img.analog_gain,
-                }
-                for img in lri.images
-            ],
-        }
-        click.echo(json.dumps(data, indent=2))
-        return
 
     # ── Rich table output ──────────────────────────────────────────────────────
     file_size_mb = path.stat().st_size / (1024 * 1024)
@@ -128,6 +85,98 @@ def _info_lri(path: Path, show_blocks: bool, show_cameras: bool, as_json: bool) 
 
     if show_blocks:
         _print_block_table(path)
+
+
+def _info_lri_json(path: Path) -> None:
+    """Emit a full-fidelity JSON document of all LELR proto blocks in an LRI file.
+
+    Each block's proto message is serialized via google.protobuf.json_format
+    MessageToDict, which faithfully converts nested messages, repeated fields,
+    packed float arrays, and enum values (as their string names).  Only fields
+    actually present in the file are included; proto2 optional defaults are omitted.
+
+    Block-level housekeeping fields (_block_offset, _block_size, _proto_size) are
+    injected alongside the proto payload so callers can locate data in the raw file.
+    """
+    from google.protobuf.json_format import MessageToDict
+    import shadow._proto as _proto
+
+    file_bytes = path.read_bytes()
+
+    light_headers: list[dict] = []
+    view_prefs: list[dict] = []
+    gps_blocks: list[dict] = []
+    unknown_blocks: list[dict] = []
+
+    for block_start, hdr in iter_blocks(file_bytes):
+        proto_bytes = file_bytes[
+            block_start + hdr.msg_offset :
+            block_start + hdr.msg_offset + hdr.msg_len
+        ]
+        if not proto_bytes:
+            continue
+
+        block_meta = {
+            "_block_offset": block_start,
+            "_block_size": hdr.block_length,
+            "_proto_size": hdr.msg_len,
+        }
+
+        try:
+            if hdr.msg_type == BlockType.LIGHT_HEADER:
+                msg = _proto.parse_light_header(proto_bytes)
+                d = MessageToDict(
+                    msg,
+                    preserving_proto_field_name=True,
+                )
+                d.update(block_meta)
+                light_headers.append(d)
+
+            elif hdr.msg_type == BlockType.VIEW_PREFERENCES:
+                msg = _proto.parse_view_preferences(proto_bytes)
+                d = MessageToDict(
+                    msg,
+                    preserving_proto_field_name=True,
+                )
+                d.update(block_meta)
+                view_prefs.append(d)
+
+            elif hdr.msg_type == BlockType.GPS_DATA:
+                msg = _proto.parse_gps_data_proto(proto_bytes)
+                d = MessageToDict(
+                    msg,
+                    preserving_proto_field_name=True,
+                )
+                d.update(block_meta)
+                gps_blocks.append(d)
+
+            else:
+                unknown_blocks.append({
+                    "type": hdr.msg_type.name,
+                    **block_meta,
+                })
+
+        except Exception as exc:
+            # Include corrupt/unrecognised blocks as error entries rather than
+            # silently dropping them.
+            unknown_blocks.append({
+                "type": hdr.msg_type.name,
+                "parse_error": str(exc),
+                **block_meta,
+            })
+
+    out: dict = {
+        "file": str(path),
+        "size_bytes": path.stat().st_size,
+        "light_headers": light_headers,
+        "view_preferences": view_prefs,
+    }
+    if gps_blocks:
+        out["gps_data"] = gps_blocks
+    if unknown_blocks:
+        out["unknown_blocks"] = unknown_blocks
+
+    click.echo(json.dumps(out, indent=2))
 
 
 def _print_camera_table(lri: shadow.LriFile) -> None:
