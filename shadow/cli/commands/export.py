@@ -1,6 +1,7 @@
 """shadow export — save camera module images as PNG or TIFF."""
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -11,10 +12,10 @@ from rich.progress import (
     MofNCompleteColumn,
     Progress,
     SpinnerColumn,
-    TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
 )
+from rich.table import Column
 
 import shadow
 from shadow._debayer import DemosaicKernel
@@ -268,27 +269,38 @@ def export(
 
     _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, denoise_tile_size, raw)
 
+    desc_col = TextColumn(
+        "{task.description}",
+        table_column=Column(min_width=28, no_wrap=True),
+    )
+
     with Progress(
         SpinnerColumn(),
-        TextColumn("{task.description}"),
+        desc_col,
         BarColumn(),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        # Row 1: per-image stage (indeterminate pulse bar, no total)
-        image_task = progress.add_task("", total=None)
-        # Row 2: overall batch (solid bar with count)
-        batch_task = progress.add_task(
-            f"[bold]batch[/bold]", total=len(images)
-        )
+        # Row 1: per-image stage — total set per image from pre-computed step count
+        image_task = progress.add_task("", total=1)
+        # Row 2: overall batch — one unit per image
+        batch_task = progress.add_task("  [dim]batch[/dim]", total=len(images))
 
         for img in images:
             name = img.camera_id.name
             dest = out / f"{name}{suffix}{ext}"
 
+            # Pre-compute the exact number of progress advances for this image
+            # so the per-image bar shows a real fraction rather than a pulse.
+            total_steps = _image_steps(img, half_res, raw, denoise, denoise_tile_size)
+            progress.reset(image_task, total=total_steps)
+
             def on_step(stage: str, _n: str = name) -> None:
-                progress.update(image_task, description=f"[bold]{_n}[/bold] {stage}")
+                progress.update(image_task, description=f"  [bold]{_n}[/bold] {stage}")
+
+            def on_advance(n: int, _task=image_task) -> None:
+                progress.advance(_task, n)
 
             kw = dict(
                 raw=raw, half_res=half_res, subtract_black=subtract_black,
@@ -298,14 +310,14 @@ def export(
                 apply_orientation=apply_orientation,
                 denoise=denoise, denoise_sigma=denoise_sigma,
                 denoise_tile_size=denoise_tile_size,
-                on_step=on_step,
+                on_step=on_step, on_advance=on_advance,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
             else:
                 img.to_png(dest, **kw)
 
-            progress.update(image_task, description=f"[dim]  {name} done[/dim]")
+            progress.update(image_task, description=f"  [dim]{name} done[/dim]")
             progress.advance(batch_task)
 
     ref_name = lri.metadata.reference_camera.name if lri.metadata.reference_camera else "—"
@@ -354,6 +366,35 @@ def _print_settings(
         parts.append(f"gamma {float(gamma):.2f}")
     if parts:
         console.print(f"  [dim]Settings: {', '.join(parts)}[/dim]")
+
+
+def _image_steps(img, half_res: bool, raw: bool,
+                 denoise: DenoiseKernel | None, denoise_tile_size: int) -> int:
+    """Pre-compute the total progress advance count for one image.
+
+    Each pipeline stage contributes its own op count:
+      debayer          → 1
+      bm3d / bilateral → 1
+      dncnn / drunet   → number of tiles (depends on image size and tile_size)
+      color correction → 1
+      save             → 1
+    raw export skips everything except save, so it returns 1.
+    """
+    from shadow._denoise import count_tiles
+
+    if raw:
+        return 1
+
+    H = img.height // 2 if half_res else img.height
+    W = img.width // 2 if half_res else img.width
+
+    ops = 3  # debayer + color correction + save
+    if denoise in (DenoiseKernel.DNCNN, DenoiseKernel.DRUNET):
+        ops += count_tiles(H, W, denoise_tile_size)
+    elif denoise is not None:
+        ops += 1  # bm3d or bilateral: single op
+
+    return ops
 
 
 def _filter_cameras(images, camera_names: tuple[str, ...]):

@@ -245,9 +245,11 @@ class RawImage:
         denoise_sigma: float = 0.05,
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
+        on_advance: Callable[[int], None] | None = None,
     ) -> np.ndarray:
         """Shared debayer → normalise → denoise → CCM → exposure → gamma → orient → uint8."""
         _step = on_step if on_step is not None else lambda _: None
+        _adv = on_advance if on_advance is not None else lambda n: None
 
         _step("debayering")
         white = self.white_level if subtract_black else _10BIT_MAX
@@ -259,13 +261,16 @@ class RawImage:
             kernel=kernel,
         )
         normalized = (rgb / white).astype(np.float32)
+        _adv(1)
         if denoise is not None:
             _step(f"denoising ({denoise.value})")
             from shadow._denoise import denoise_image
             # Clip before denoising: values must be in [0, 1] for BM3D.
             np.clip(normalized, 0.0, 1.0, out=normalized)
             normalized = denoise_image(
-                normalized, denoise, sigma=denoise_sigma, tile_size=denoise_tile_size
+                normalized, denoise,
+                sigma=denoise_sigma, tile_size=denoise_tile_size,
+                on_advance=on_advance,
             )
         _step("color correction")
         if apply_ccm:
@@ -286,6 +291,7 @@ class RawImage:
         result = (normalized * 255.0).clip(0, 255).astype(np.uint8)
         if apply_orientation:
             result = self._orient(result)
+        _adv(1)
         return result
 
     def to_png(
@@ -306,6 +312,7 @@ class RawImage:
         denoise_sigma: float = 0.05,
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
+        on_advance: Callable[[int], None] | None = None,
     ) -> None:
         """Save as PNG.
 
@@ -328,11 +335,14 @@ class RawImage:
         denoise_tile_size: spatial tile size for DnCNN/DRUNet (default 512). Increase to
                            1024/2048 on high-VRAM GPUs; reduce to 256 if you run out of VRAM.
         on_step: optional callback invoked with a stage label at each pipeline step.
+        on_advance: optional callback invoked with the number of ops completed; called once
+                    per tile for DnCNN/DRUNet or once per stage for all other kernels.
 
         Note: Pillow does not support 16-bit RGB PNG natively. Use to_tiff()
         for 16-bit per-channel debayered output.
         """
         _step = on_step if on_step is not None else lambda _: None
+        _adv = on_advance if on_advance is not None else lambda n: None
         path = str(path)
         if raw:
             _step("saving")
@@ -340,6 +350,7 @@ class RawImage:
             arr = self.to_raw_numpy(subtract_black=subtract_black)
             scaled = (arr.astype(np.float32) * (65535.0 / white)).clip(0, 65535).astype(np.uint16)
             PILImage.fromarray(scaled).save(path)
+            _adv(1)
         else:
             rgb8 = self._export_rgb8(
                 half_res=half_res, subtract_black=subtract_black,
@@ -348,10 +359,11 @@ class RawImage:
                 apply_orientation=apply_orientation,
                 denoise=denoise, denoise_sigma=denoise_sigma,
                 denoise_tile_size=denoise_tile_size,
-                on_step=on_step,
+                on_step=on_step, on_advance=on_advance,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)
+            _adv(1)
 
     def to_tiff(
         self,
@@ -371,6 +383,7 @@ class RawImage:
         denoise_sigma: float = 0.05,
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
+        on_advance: Callable[[int], None] | None = None,
     ) -> None:
         """Save as TIFF.
 
@@ -378,12 +391,13 @@ class RawImage:
         raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, CCM-corrected, gamma-encoded)
 
         Same apply_ccm / kernel / gamma / exposure / awb_gains_override / apply_orientation /
-        denoise / denoise_sigma / denoise_tile_size / on_step semantics as to_png().
+        denoise / denoise_sigma / denoise_tile_size / on_step / on_advance semantics as to_png().
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
         """
         _step = on_step if on_step is not None else lambda _: None
+        _adv = on_advance if on_advance is not None else lambda n: None
         path = str(path)
         if raw:
             _step("saving")
@@ -391,6 +405,7 @@ class RawImage:
             arr = self.to_raw_numpy(subtract_black=subtract_black)
             scaled = (arr.astype(np.float32) * (65535.0 / white)).clip(0, 65535).astype(np.uint16)
             PILImage.fromarray(scaled).save(path)
+            _adv(1)
         else:
             rgb8 = self._export_rgb8(
                 half_res=half_res, subtract_black=subtract_black,
@@ -399,9 +414,10 @@ class RawImage:
                 apply_orientation=apply_orientation,
                 denoise=denoise, denoise_sigma=denoise_sigma,
                 denoise_tile_size=denoise_tile_size,
-                on_step=on_step,
+                on_step=on_step, on_advance=on_advance,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)
+            _adv(1)
 
 

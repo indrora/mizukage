@@ -7,6 +7,8 @@ Optional:
 """
 from __future__ import annotations
 
+import math
+from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
@@ -106,7 +108,30 @@ def _deepinv_model(name: str, device) -> Any:
     return _model_cache[cache_key]
 
 
-def _tile_denoise(model_fn, t: "torch.Tensor", tile: int, overlap: int) -> "torch.Tensor":
+def count_tiles(H: int, W: int, tile_size: int) -> int:
+    """Return the number of advance() calls denoise_image will make for DnCNN/DRUNet.
+
+    Matches the runtime branch in denoise_image exactly:
+    - Image fits in one tile (H ≤ tile_size AND W ≤ tile_size) → 1
+    - Otherwise → number of write-region tiles produced by _tile_denoise
+
+    Used by callers to pre-compute the total operation count for progress bars.
+    BM3D and BILATERAL always advance once regardless of image size.
+    """
+    if H <= tile_size and W <= tile_size:
+        return 1
+    overlap = max(32, tile_size // 8)
+    step = tile_size - overlap
+    return math.ceil(H / step) * math.ceil(W / step)
+
+
+def _tile_denoise(
+    model_fn,
+    t: "torch.Tensor",
+    tile: int,
+    overlap: int,
+    on_tile_done: "Callable[[], None] | None" = None,
+) -> "torch.Tensor":
     """Run a denoising model in overlapping tiles to stay within VRAM limits.
 
     Write regions are non-overlapping strides of (tile - overlap), guaranteeing
@@ -114,13 +139,15 @@ def _tile_denoise(model_fn, t: "torch.Tensor", tile: int, overlap: int) -> "torc
     outward by overlap//2 pixels on each side (clamped at image edges) to give the
     model boundary context and prevent seam artefacts.
 
-    model_fn: callable (patch: Tensor[1,C,H,W]) → Tensor[1,C,H,W]
-    t:        input tensor, shape (1, C, H, W), on the target device
-    tile:     spatial size of each square tile (pixels)
-    overlap:  context strip added on each side of the write region (pixels, even)
+    model_fn:     callable (patch: Tensor[1,C,H,W]) → Tensor[1,C,H,W]
+    t:            input tensor, shape (1, C, H, W), on the target device
+    tile:         spatial size of each square tile (pixels)
+    overlap:      context strip added on each side of the write region (pixels, even)
+    on_tile_done: called once per completed tile (for progress tracking)
     """
     import torch
 
+    _done = on_tile_done or (lambda: None)
     _, C, H, W = t.shape
     step = tile - overlap
     half = overlap // 2
@@ -139,6 +166,7 @@ def _tile_denoise(model_fn, t: "torch.Tensor", tile: int, overlap: int) -> "torc
             patch = t[:, :, ty0:ty1, tx0:tx1]
             p_out = model_fn(patch)
             out[:, :, wy0:wy1, wx0:wx1] = p_out[:, :, ry0:ry1, rx0:rx1]
+            _done()
 
     return out
 
@@ -148,19 +176,24 @@ def denoise_image(
     kernel: DenoiseKernel,
     sigma: float = 0.05,
     tile_size: int = 512,
+    on_advance: "Callable[[int], None] | None" = None,
 ) -> np.ndarray:
     """Denoise a float32 (H, W, 3) linear RGB image in [0, 1].
 
-    rgb:       float32 array, shape (H, W, 3), values in [0, 1].
-    kernel:    algorithm to use; see DenoiseKernel.
-    sigma:     noise strength estimate. Range 0.02 (subtle) to 0.15 (heavy).
-               Meaning: sigma_psd for BM3D; colour/space sigma for BILATERAL;
-               noise std dev for DNCNN / DRUNET. Default 0.05.
-    tile_size: spatial tile size for DnCNN / DRUNet (default 512). Reduce to
-               256 or 128 if you run out of VRAM. Ignored by BM3D / BILATERAL.
+    rgb:        float32 array, shape (H, W, 3), values in [0, 1].
+    kernel:     algorithm to use; see DenoiseKernel.
+    sigma:      noise strength estimate. Range 0.02 (subtle) to 0.15 (heavy).
+                Meaning: sigma_psd for BM3D; colour/space sigma for BILATERAL;
+                noise std dev for DNCNN / DRUNET. Default 0.05.
+    tile_size:  spatial tile size for DnCNN / DRUNet (default 512). Reduce to
+                256 or 128 if you run out of VRAM. Ignored by BM3D / BILATERAL.
+    on_advance: optional progress callback — called with advance count (1 per
+                tile for DnCNN/DRUNet, once for BM3D/BILATERAL when done).
 
     Returns float32 (H, W, 3) with the same value range.
     """
+    _adv = on_advance if on_advance is not None else lambda n: None
+
     if kernel == DenoiseKernel.BM3D:
         try:
             import bm3d
@@ -168,7 +201,9 @@ def denoise_image(
             raise ImportError(
                 "DenoiseKernel.BM3D requires bm3d: pip install 'shadow[denoise]'"
             ) from exc
-        return bm3d.bm3d(rgb, sigma_psd=sigma).astype(np.float32)
+        result = bm3d.bm3d(rgb, sigma_psd=sigma).astype(np.float32)
+        _adv(1)
+        return result
 
     if kernel == DenoiseKernel.BILATERAL:
         try:
@@ -184,6 +219,7 @@ def denoise_image(
         t = torch.from_numpy(rgb.transpose(2, 0, 1)[np.newaxis]).to(device)
         ks = _bilateral_ksize(sigma)
         result = KF.bilateral_blur(t, (ks, ks), sigma, (sigma * 10, sigma * 10))
+        _adv(1)
         return result[0].permute(1, 2, 0).cpu().numpy().astype(np.float32)
 
     if kernel in (DenoiseKernel.DNCNN, DenoiseKernel.DRUNET):
@@ -203,12 +239,16 @@ def denoise_image(
         overlap = max(32, tile_size // 8)
         model_fn = lambda patch: model(patch, sigma=sigma)   # noqa: E731
 
-        if H <= tile_size and W <= tile_size:
-            with torch.no_grad():
+        with torch.no_grad():
+            if H <= tile_size and W <= tile_size:
                 result = model_fn(t)
-        else:
-            with torch.no_grad():
-                result = _tile_denoise(model_fn, t, tile=tile_size, overlap=overlap)
+                _adv(1)
+            else:
+                result = _tile_denoise(
+                    model_fn, t,
+                    tile=tile_size, overlap=overlap,
+                    on_tile_done=lambda: _adv(1),
+                )
 
         return result[0].permute(1, 2, 0).cpu().numpy().astype(np.float32)
 
