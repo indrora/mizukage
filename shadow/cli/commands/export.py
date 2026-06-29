@@ -18,6 +18,7 @@ from rich.progress import (
 from rich.table import Column
 
 import shadow
+from shadow._calib import compute_scalar_sigma, load_vst_model
 from shadow._debayer import DemosaicKernel
 from shadow._denoise import DenoiseKernel
 from shadow._types import AwbGains, CameraId
@@ -199,6 +200,18 @@ _GAMMA = _GammaParamType()
     metavar="GAIN",
     help="Override the blue AWB gain (e.g. 1.76). Ignored with --no-awb or --raw.",
 )
+@click.option(
+    "--calib",
+    "calib_dir",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    metavar="DIR",
+    help=(
+        "Path to a Light L16 lightcal directory (contains calibration.lri). "
+        "When combined with --denoise, the factory VST noise model is used to "
+        "compute a per-camera sigma instead of the --denoise-sigma default."
+    ),
+)
 def export(
     file: str,
     out_dir: str,
@@ -218,6 +231,7 @@ def export(
     denoise_tile_size: int,
     awb_r: float | None,
     awb_b: float | None,
+    calib_dir: str | None,
 ) -> None:
     """Export camera module images from an LRI file.
 
@@ -251,6 +265,19 @@ def export(
     apply_orientation = not no_orient
     demosaic_kernel = DemosaicKernel(kernel)
     denoise = DenoiseKernel(denoise_kernel) if denoise_kernel else None
+
+    # Load the factory VST noise model when a calibration directory is provided
+    # alongside a denoising kernel.  An empty list means "model unavailable".
+    vst_model = (
+        load_vst_model(Path(calib_dir))
+        if calib_dir is not None and denoise is not None
+        else []
+    )
+    if calib_dir is not None and denoise is not None and not vst_model:
+        console.print(
+            "[yellow]Warning: no VST model found in calibration directory; "
+            "falling back to --denoise-sigma.[/yellow]"
+        )
 
     # Build AWB gains override if either channel was specified explicitly.
     awb_override: AwbGains | None = None
@@ -291,6 +318,19 @@ def export(
             name = img.camera_id.name
             dest = out / f"{name}{suffix}{ext}"
 
+            # When the factory VST noise model is available, use it to derive
+            # a per-camera sigma from the actual capture analog gain.  This is
+            # more accurate than the user-supplied scalar because it accounts
+            # for the sensor's measured shot-noise and read-noise coefficients.
+            effective_sigma = denoise_sigma
+            if vst_model and denoise is not None:
+                effective_sigma = compute_scalar_sigma(vst_model, img.analog_gain)
+                console.print(
+                    f"  [dim]Using VST sigma={effective_sigma:.3f} "
+                    f"for camera {name} "
+                    f"(analog_gain={img.analog_gain:.2f})[/dim]"
+                )
+
             # Pre-compute the exact number of progress advances for this image
             # so the per-image bar shows a real fraction rather than a pulse.
             total_steps = _image_steps(img, half_res, raw, denoise, denoise_tile_size)
@@ -308,7 +348,7 @@ def export(
                 apply_ccm=apply_ccm, kernel=demosaic_kernel,
                 gamma=gamma, exposure=exposure,
                 apply_orientation=apply_orientation,
-                denoise=denoise, denoise_sigma=denoise_sigma,
+                denoise=denoise, denoise_sigma=effective_sigma,
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
             )
