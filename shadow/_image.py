@@ -21,13 +21,23 @@ from shadow._types import (
 _10BIT_MAX = 1023
 
 
-def _srgb_gamma(linear: np.ndarray) -> np.ndarray:
-    """Apply sRGB gamma to a float32 array normalised to [0..1].
+def _apply_gamma(normalized: np.ndarray, gamma: bool | float) -> np.ndarray:
+    """Apply a gamma/tone curve to a float32 array already normalised to [0..1].
 
-    Values outside [0..1] are clipped first so the power function is safe.
+    gamma=True  → full sRGB piecewise transfer function
+    gamma=False → identity (linear, no encoding)
+    gamma=float → simple power-law encoding: out = v^(1/gamma)
+                  e.g. gamma=2.2 approximates sRGB without the linear toe
+
+    Note: check True/False with `is` before any numeric comparison because
+    bool is a subclass of int and True == 1 == 1.0 in Python.
     """
-    v = np.clip(linear, 0.0, 1.0).astype(np.float32)
-    return np.where(v <= 0.0031308, 12.92 * v, 1.055 * np.power(v, 1.0 / 2.4) - 0.055)
+    v = np.clip(normalized, 0.0, 1.0).astype(np.float32)
+    if gamma is True:
+        return np.where(v <= 0.0031308, 12.92 * v, 1.055 * np.power(v, 1.0 / 2.4) - 0.055)
+    if gamma is False or float(gamma) == 1.0:
+        return v
+    return np.power(v, 1.0 / float(gamma)).astype(np.float32)
 
 
 @dataclass
@@ -130,42 +140,40 @@ class RawImage:
         half_res: bool = False,
         subtract_black: bool = True,
         apply_awb: bool = True,
+        awb_gains_override: AwbGains | None = None,
     ) -> np.ndarray:
         """Demosaic the raw Bayer data to an RGB array.
 
-        Returns:
-            half_res=False: float32 (height, width, 3) — full bilinear demosaic
-            half_res=True:  float32 (height/2, width/2, 3) — fast subsampling
+        Returns float32 (height, width, 3) or (height/2, width/2, 3) if half_res.
+        Values are in the same linear-light range as the input (e.g. [0..~959]
+        after black subtraction). No gamma is applied here.
 
-        AWB gains (if recorded in the file) are applied to the Bayer array
-        before demosaicing so that interpolation happens in the white-balanced
-        colour space. Pass apply_awb=False for raw linear output.
-
-        For mono sensors, returns the raw array expanded to 3 identical channels.
+        apply_awb=True  → apply per-channel white-balance gains before demosaicing
+        awb_gains_override → if provided, use these gains instead of self.awb_gains
+                             (only meaningful when apply_awb=True)
         """
         from shadow._debayer import debayer_half, debayer_bilinear
 
         raw = self.to_raw_numpy(subtract_black=subtract_black)
 
         if self.is_mono or self.bayer_r_row is None:
-            # Mono: replicate the single channel to R/G/B
             rgb = np.stack([raw, raw, raw], axis=2)
             return rgb.astype(np.float32)
 
         r_row = self.bayer_r_row
         r_col = self.bayer_r_col
 
-        # Apply AWB gains channel-by-channel to the Bayer mosaic before
-        # demosaicing. This prevents interpolation from mixing unbalanced
-        # channel values across Bayer boundaries.
-        gains = self.awb_gains if apply_awb else None
+        gains = None
+        if apply_awb:
+            gains = awb_gains_override if awb_gains_override is not None else self.awb_gains
+
         if gains is not None:
             b_row, b_col = 1 - r_row, 1 - r_col
             bayer = raw.astype(np.float32)
-            bayer[r_row::2, r_col::2] *= gains.r   # R
-            bayer[r_row::2, b_col::2] *= gains.gr  # G1 (green in R rows)
-            bayer[b_row::2, r_col::2] *= gains.gb  # G2 (green in B rows)
-            bayer[b_row::2, b_col::2] *= gains.b   # B
+            bayer[r_row::2, r_col::2] *= gains.r
+            bayer[r_row::2, b_col::2] *= gains.gr
+            bayer[b_row::2, r_col::2] *= gains.gb
+            bayer[b_row::2, b_col::2] *= gains.b
         else:
             bayer = raw.astype(np.float32)
 
@@ -175,6 +183,30 @@ class RawImage:
 
     # ── File export ───────────────────────────────────────────────────────────
 
+    def _export_rgb8(
+        self,
+        *,
+        half_res: bool,
+        subtract_black: bool,
+        apply_awb: bool,
+        awb_gains_override: AwbGains | None,
+        gamma: bool | float,
+        exposure: float,
+    ) -> np.ndarray:
+        """Shared debayer → normalise → exposure → gamma → uint8 path."""
+        white = self.white_level if subtract_black else _10BIT_MAX
+        rgb = self.to_debayered_numpy(
+            half_res=half_res,
+            subtract_black=subtract_black,
+            apply_awb=apply_awb,
+            awb_gains_override=awb_gains_override,
+        )
+        normalized = (rgb / white).astype(np.float32)
+        if exposure != 0.0:
+            normalized *= 2.0 ** exposure
+        normalized = _apply_gamma(normalized, gamma)
+        return (normalized * 255.0).clip(0, 255).astype(np.uint8)
+
     def to_png(
         self,
         path: str | Path,
@@ -183,38 +215,36 @@ class RawImage:
         half_res: bool = False,
         subtract_black: bool = True,
         apply_awb: bool = True,
-        gamma: bool = True,
+        awb_gains_override: AwbGains | None = None,
+        gamma: bool | float = True,
+        exposure: float = 0.0,
     ) -> None:
         """Save as PNG.
 
         raw=True  → 16-bit grayscale Bayer PNG (no demosaic; full bit depth)
-        raw=False → 8-bit RGB PNG (demosaiced, AWB-corrected, gamma-encoded by default)
-        half_res  → half-resolution demosaic (ignored when raw=True)
-        apply_awb → apply white-balance gains (ignored when raw=True)
-        gamma     → apply sRGB gamma curve (ignored when raw=True); without it the
-                    image will appear very dark because sensor data is linear light
+        raw=False → 8-bit RGB PNG (debayered, AWB-corrected, gamma-encoded by default)
+
+        gamma: True  = sRGB transfer function (default)
+               False = linear (will look very dark)
+               float = simple power-law, e.g. gamma=2.2 → v^(1/2.2)
+        exposure: EV stop adjustment applied before gamma (+1.0 = twice as bright)
+        awb_gains_override: if provided, use these gains instead of the file's gains
 
         Note: Pillow does not support 16-bit RGB PNG natively. Use to_tiff()
         for 16-bit per-channel debayered output.
         """
         path = str(path)
-        white = self.white_level if subtract_black else _10BIT_MAX
-
         if raw:
+            white = self.white_level if subtract_black else _10BIT_MAX
             arr = self.to_raw_numpy(subtract_black=subtract_black)
-            # Scale [0..white] → [0..65535] for a proper 16-bit PNG
             scaled = (arr.astype(np.float32) * (65535.0 / white)).clip(0, 65535).astype(np.uint16)
-            # Pillow's fromarray with uint16 2D → mode "I;16" → 16-bit grayscale PNG
             PILImage.fromarray(scaled).save(path)
         else:
-            rgb = self.to_debayered_numpy(
-                half_res=half_res, subtract_black=subtract_black, apply_awb=apply_awb
+            rgb8 = self._export_rgb8(
+                half_res=half_res, subtract_black=subtract_black,
+                apply_awb=apply_awb, awb_gains_override=awb_gains_override,
+                gamma=gamma, exposure=exposure,
             )
-            # Normalise to [0..1]; AWB can push R/B above white_level so clip.
-            normalized = (rgb / white).clip(0.0, 1.0).astype(np.float32)
-            if gamma:
-                normalized = _srgb_gamma(normalized)
-            rgb8 = (normalized * 255.0).clip(0, 255).astype(np.uint8)
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
     def to_tiff(
@@ -225,33 +255,32 @@ class RawImage:
         half_res: bool = False,
         subtract_black: bool = True,
         apply_awb: bool = True,
-        gamma: bool = True,
+        awb_gains_override: AwbGains | None = None,
+        gamma: bool | float = True,
+        exposure: float = 0.0,
     ) -> None:
         """Save as TIFF.
 
         raw=True  → 16-bit grayscale Bayer TIFF (full bit depth, scaled to uint16)
         raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, gamma-encoded by default)
-        apply_awb → apply white-balance gains (ignored when raw=True)
-        gamma     → apply sRGB gamma curve (ignored when raw=True)
+
+        Same gamma / exposure / awb_gains_override semantics as to_png().
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
         """
         path = str(path)
-        white = self.white_level if subtract_black else _10BIT_MAX
-
         if raw:
+            white = self.white_level if subtract_black else _10BIT_MAX
             arr = self.to_raw_numpy(subtract_black=subtract_black)
             scaled = (arr.astype(np.float32) * (65535.0 / white)).clip(0, 65535).astype(np.uint16)
             PILImage.fromarray(scaled).save(path)
         else:
-            rgb = self.to_debayered_numpy(
-                half_res=half_res, subtract_black=subtract_black, apply_awb=apply_awb
+            rgb8 = self._export_rgb8(
+                half_res=half_res, subtract_black=subtract_black,
+                apply_awb=apply_awb, awb_gains_override=awb_gains_override,
+                gamma=gamma, exposure=exposure,
             )
-            normalized = (rgb / white).clip(0.0, 1.0).astype(np.float32)
-            if gamma:
-                normalized = _srgb_gamma(normalized)
-            rgb8 = (normalized * 255.0).clip(0, 255).astype(np.uint8)
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
 
