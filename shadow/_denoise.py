@@ -40,6 +40,12 @@ class DenoiseKernel(str, Enum):
     DRUNET    = "drunet"
 
 
+# Type alias for user-supplied denoising functions.
+# Signature: (rgb: float32 H×W×3 in [0,1], sigma: float) → float32 H×W×3 in [0,1].
+# Passed directly to denoise_image() or make_tiled_denoiser().
+DenoiseFn = Callable[[np.ndarray, float], np.ndarray]
+
+
 # Module-level model cache: key = "name:device_type"
 _model_cache: dict[str, Any] = {}
 
@@ -178,7 +184,7 @@ def _tile_denoise(
 
 def denoise_image(
     rgb: np.ndarray,
-    kernel: DenoiseKernel,
+    kernel: "DenoiseKernel | DenoiseFn",
     sigma: float = 0.05,
     tile_size: int = 512,
     on_advance: "Callable[[int], None] | None" = None,
@@ -186,18 +192,30 @@ def denoise_image(
     """Denoise a float32 (H, W, 3) linear RGB image in [0, 1].
 
     rgb:        float32 array, shape (H, W, 3), values in [0, 1].
-    kernel:     algorithm to use; see DenoiseKernel.
+    kernel:     algorithm to use.  Either a DenoiseKernel enum value (built-in
+                algorithm) or a DenoiseFn callable ``(rgb, sigma) → rgb``
+                (arbitrary user-supplied denoiser, called directly with no tiling).
+                Use make_tiled_denoiser() to wrap a torch model_fn that needs tiling.
     sigma:      noise strength estimate. Range 0.02 (subtle) to 0.15 (heavy).
                 Meaning: sigma_psd for BM3D; colour/space sigma for BILATERAL;
-                noise std dev for DNCNN / DRUNET. Default 0.05.
+                noise std dev for DNCNN / DRUNET. Passed as-is to DenoiseFn callables.
+                Default 0.05.
     tile_size:  spatial tile size for DnCNN / DRUNet (default 512). Reduce to
-                256 or 128 if you run out of VRAM. Ignored by BM3D / BILATERAL.
+                256 or 128 if you run out of VRAM. Ignored by BM3D / BILATERAL and
+                by DenoiseFn callables (which handle their own tiling, if any).
     on_advance: optional progress callback — called with advance count (1 per
-                tile for DnCNN/DRUNet, once for BM3D/BILATERAL when done).
+                tile for DnCNN/DRUNet, once for BM3D/BILATERAL/DenoiseFn when done).
 
     Returns float32 (H, W, 3) with the same value range.
     """
     _adv = on_advance if on_advance is not None else lambda n: None
+
+    # User-supplied callable: dispatch directly, no tiling — the caller is
+    # responsible for tiling if needed (see make_tiled_denoiser()).
+    if callable(kernel) and not isinstance(kernel, DenoiseKernel):
+        result = kernel(rgb, sigma)
+        _adv(1)
+        return result
 
     if kernel == DenoiseKernel.BM3D:
         try:
@@ -258,3 +276,51 @@ def denoise_image(
         return result[0].permute(1, 2, 0).cpu().numpy().astype(np.float32)
 
     raise ValueError(f"Unknown denoise kernel: {kernel!r}")  # pragma: no cover
+
+
+def make_tiled_denoiser(
+    model_fn: "Callable",
+    tile_size: int = 512,
+    on_advance: "Callable[[], None] | None" = None,
+) -> DenoiseFn:
+    """Wrap a torch model callable with shadow's overlapping-tile loop.
+
+    Returns a DenoiseFn ``(rgb: np.ndarray, sigma: float) → np.ndarray`` that
+    can be passed directly as the ``denoise=`` parameter to ``to_png()``,
+    ``to_tiff()``, or ``denoise_image()``.
+
+    model_fn:   any callable ``(patch: Tensor[1,C,H,W]) → Tensor[1,C,H,W]``.
+                The sigma argument from the outer DenoiseFn is NOT forwarded —
+                if your model needs sigma, close over it before calling
+                make_tiled_denoiser(), e.g.:
+                  ``make_tiled_denoiser(lambda patch: model(patch, sigma=0.05))``
+    tile_size:  spatial size of each square tile (pixels).  Reduce to 256/128
+                if you run out of VRAM.  Default 512.
+    on_advance: called once per completed tile (no argument).  Use this for
+                progress tracking inside the tiled loop; the outer on_advance
+                callback passed to denoise_image() is called only once (on
+                completion of the whole image) by the DenoiseFn dispatch path.
+
+    Torch is imported lazily inside the returned closure; the device is chosen
+    at make_tiled_denoiser() call-time via _best_torch_device() so all tiles
+    run on the same device.
+    """
+    import torch
+    device = _best_torch_device()
+
+    def _denoise(rgb: np.ndarray, sigma: float) -> np.ndarray:
+        # sigma is accepted for interface compatibility but not forwarded;
+        # callers that need sigma should close over it in model_fn.
+        t = torch.from_numpy(rgb.transpose(2, 0, 1)[np.newaxis]).to(device)
+        H, W = rgb.shape[:2]
+        overlap = max(32, tile_size // 8)
+        with torch.no_grad():
+            if H <= tile_size and W <= tile_size:
+                out = model_fn(t)
+                if on_advance is not None:
+                    on_advance()
+            else:
+                out = _tile_denoise(model_fn, t, tile_size, overlap, on_advance)
+        return out[0].permute(1, 2, 0).cpu().numpy().astype(np.float32)
+
+    return _denoise
