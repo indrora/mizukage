@@ -13,6 +13,7 @@ _TAG_ILLUM  = "color_illum_combo"
 _ILLUM_ORDER = ["D65", "D75", "D50", "A", "F2", "F7", "F11", "TL84", "UNKNOWN"]
 
 
+
 def build(data: "CalibData", init_camera: str | None) -> None:
     """Build the color tab skeleton."""
     import dearpygui.dearpygui as dpg
@@ -81,7 +82,54 @@ def update(data: "CalibData", camera: str) -> None:
         with dpg.group(tag="color_content"):
             pass
 
+        # Neutral-point scatter — all illuminants on one plot (static, not per-combo)
+        dpg.add_separator()
+        dpg.add_text("Neutral points (rg / bg ratios per illuminant)", color=[200, 200, 100])
+        _neutral_scatter(illum_map)
+
     _render(illums[0])
+
+
+def _neutral_scatter(illum_map: dict[str, dict]) -> None:
+    """Render a 2-D scatter of rg_ratio vs bg_ratio for all illuminants."""
+    import dearpygui.dearpygui as dpg
+
+    # Gather points
+    points: list[tuple[str, float, float]] = []
+    for illum, entry in illum_map.items():
+        rg = entry.get("rg_ratio")
+        bg = entry.get("bg_ratio")
+        if rg is not None and bg is not None:
+            points.append((illum, float(rg), float(bg)))
+
+    if not points:
+        dpg.add_text("No neutral-point data available.", color=[160, 160, 160])
+        return
+
+    with dpg.plot(label="Neutral-point locus", height=260, width=380, no_mouse_pos=True):
+        dpg.add_plot_axis(dpg.mvXAxis, label="rg ratio")
+        with dpg.plot_axis(dpg.mvYAxis, label="bg ratio"):
+            for illum, rg, bg in points:
+                dpg.add_scatter_series([rg], [bg], label=illum)
+        dpg.add_plot_legend()
+
+    # Text list below the plot for precise values
+    with dpg.table(
+        header_row=True,
+        borders_innerV=True,
+        borders_outerH=True,
+        borders_outerV=True,
+        resizable=False,
+        width=380,
+    ):
+        dpg.add_table_column(label="Illuminant", width_fixed=True, init_width_or_weight=90)
+        dpg.add_table_column(label="rg ratio",   width_fixed=True, init_width_or_weight=90)
+        dpg.add_table_column(label="bg ratio",   width_fixed=True, init_width_or_weight=90)
+        for illum, rg, bg in points:
+            with dpg.table_row():
+                dpg.add_text(illum)
+                dpg.add_text(f"{rg:.4f}")
+                dpg.add_text(f"{bg:.4f}")
 
 
 def _mat_widget(title: str, mat_d: dict, tag_prefix: str) -> None:

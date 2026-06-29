@@ -24,6 +24,7 @@ class CalibData:
     white_level: float
     device_model: str
     extrinsics: dict[str, dict]               # camera → {R, t, camera_loc, is_movable, mirror_info}
+    calib_timestamp: str                       # "YYYY-MM-DD HH:MM:SS" from mc.time_stamp, or ""
 
 
 _CAM_ORDER = [
@@ -53,6 +54,7 @@ def load_calib_data(calib_dir: Path) -> CalibData:
     black_level = 42.0
     white_level = 1023.0
     device_model = ""
+    calib_timestamp = ""
 
     if cal_path.exists():
         raw = cal_path.read_bytes()
@@ -72,6 +74,17 @@ def load_calib_data(calib_dir: Path) -> CalibData:
 
             if not device_model and lh.HasField("device_model_name"):
                 device_model = lh.device_model_name
+
+            # Calibration timestamp (first mc that has one)
+            if not calib_timestamp:
+                for mc_ts in lh.module_calibration:
+                    if mc_ts.HasField("time_stamp"):
+                        ts = mc_ts.time_stamp
+                        calib_timestamp = (
+                            f"{ts.year}-{ts.month:02d}-{ts.day:02d}"
+                            f" {ts.hour:02d}:{ts.minute:02d}:{ts.second:02d}"
+                        )
+                        break
 
             # Sensor characteristics
             for sd in lh.sensor_data:
@@ -270,6 +283,7 @@ def load_calib_data(calib_dir: Path) -> CalibData:
         white_level=white_level,
         device_model=device_model,
         extrinsics=extrinsics,
+        calib_timestamp=calib_timestamp,
     )
 
 

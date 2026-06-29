@@ -71,7 +71,7 @@ def update(data: "CalibData", camera: str) -> None:
             resizable=True,
             width=-1,
         ):
-            for label in ["Hall", "Dist (mm)", "fx", "fy", "cx", "cy", "RMS", "Reproj"]:
+            for label in ["Hall", "Dist (mm)", "fx", "fy", "cx", "cy", "RMS", "Reproj", "Temp (C)"]:
                 dpg.add_table_column(label=label)
 
             for b in bundles:
@@ -83,6 +83,7 @@ def update(data: "CalibData", camera: str) -> None:
                 extr = b.get("extrinsics", {})
                 can  = extr.get("canonical", {})
                 rp   = can.get("reprojection_error", None)
+                temp = b.get("sensor_temp", None)
 
                 fx  = km.get("x00", float("nan"))
                 fy  = km.get("x11", float("nan"))
@@ -105,6 +106,7 @@ def update(data: "CalibData", camera: str) -> None:
                     dpg.add_text(_f(cy))
                     dpg.add_text(f"{rms:.4f}" if isinstance(rms, float) else "—")
                     dpg.add_text(f"{rp:.4f}" if isinstance(rp, float) else "—")
+                    dpg.add_text(f"{temp:.0f}" if isinstance(temp, (int, float)) else "—")
 
         # Distortion coefficients
         dist_d = geo.get("distortion", {})
