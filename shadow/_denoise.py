@@ -3,11 +3,12 @@
 Built-in:   none (denoising is always an optional enhancement)
 Optional:
   shadow[denoise]     — BM3D (CPU, high quality)
-  shadow[denoise-gpu] — bilateral filter via kornia + PyTorch (GPU-accelerated)
+  shadow[denoise-gpu] — bilateral / DnCNN / DRUNet via kornia + deepinv + PyTorch
 """
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 import numpy as np
 
@@ -17,18 +18,28 @@ class DenoiseKernel(str, Enum):
 
     Requires ``pip install shadow[denoise]``:
       BM3D      — Block Matching 3D; gold-standard classical CPU denoiser.
-                  Accepts float32 (H, W, 3) in [0, 1] and a sigma estimate.
                   Typical sigma: 0.02 (subtle) – 0.15 (heavy).
 
     Requires ``pip install shadow[denoise-gpu]``:
       BILATERAL — Edge-preserving bilateral filter via kornia + PyTorch.
-                  Runs on CUDA (NVIDIA/AMD ROCm), DirectML (AMD/Intel Windows),
-                  MPS (Apple Silicon), or CPU in that priority order.
-                  Typically 10-50x faster than BM3D when a GPU is present.
+                  Fast, no model download. 10-50x quicker than BM3D on GPU.
+      DNCNN     — Deep CNN blind denoiser (deepinv). Downloads ~3 MB weights
+                  on first use. GPU-accelerated; good speed/quality balance.
+      DRUNET    — Deeper residual U-Net (deepinv). Downloads ~37 MB weights on
+                  first use. Best quality of the three GPU options; sigma-aware.
+
+    All GPU kernels run on CUDA (NVIDIA/AMD ROCm), DirectML (AMD/Intel Windows),
+    MPS (Apple Silicon), or CPU — whichever is available first.
     """
 
-    BM3D = "bm3d"
+    BM3D      = "bm3d"
     BILATERAL = "bilateral"
+    DNCNN     = "dncnn"
+    DRUNET    = "drunet"
+
+
+# Module-level model cache: key = "name:device_type"
+_model_cache: dict[str, Any] = {}
 
 
 def _best_torch_device():
@@ -37,8 +48,7 @@ def _best_torch_device():
     Priority: CUDA/ROCm → DirectML (AMD/Intel Windows) → MPS (Apple) → CPU.
     torch.cuda.is_available() is True for both NVIDIA CUDA and AMD ROCm builds
     of PyTorch, so no separate ROCm branch is needed.
-    torch-directml is detected opportunistically and used automatically on
-    Windows AMD/Intel without needing to be a declared dependency.
+    torch-directml is detected opportunistically; it need not be a declared dep.
     """
     import torch
     if torch.cuda.is_available():
@@ -59,6 +69,43 @@ def _bilateral_ksize(sigma: float) -> int:
     return min(k, 21)
 
 
+def _deepinv_model(name: str, device) -> Any:
+    """Load and cache a deepinv denoising model.
+
+    Models are downloaded on first use (~3–37 MB depending on model) and
+    cached in memory for the process lifetime to avoid reloading on each export.
+    """
+    cache_key = f"{name}:{device}"
+    if cache_key not in _model_cache:
+        try:
+            import deepinv as dinv
+        except ImportError as exc:
+            raise ImportError(
+                f"DenoiseKernel.{name.upper()} requires deepinv: "
+                "pip install 'shadow[denoise-gpu]'"
+            ) from exc
+
+        if name == "dncnn":
+            model = dinv.models.DnCNN(
+                in_channels=3,
+                out_channels=3,
+                pretrained="download",
+                device=device,
+            )
+        elif name == "drunet":
+            model = dinv.models.DRUNet(
+                in_channels=3,
+                out_channels=3,
+                pretrained="download",
+                device=device,
+            )
+        else:  # pragma: no cover
+            raise ValueError(f"Unknown deepinv model: {name!r}")
+
+        _model_cache[cache_key] = model.eval()
+    return _model_cache[cache_key]
+
+
 def denoise_image(
     rgb: np.ndarray,
     kernel: DenoiseKernel,
@@ -68,8 +115,9 @@ def denoise_image(
 
     rgb:    float32 array, shape (H, W, 3), values in [0, 1].
     kernel: algorithm to use; see DenoiseKernel.
-    sigma:  noise strength (sigma_psd for BM3D; colour/space sigma for
-            bilateral). Range 0.02 (subtle) to 0.15 (heavy). Default 0.05.
+    sigma:  noise strength estimate. Range 0.02 (subtle) to 0.15 (heavy).
+            Meaning: sigma_psd for BM3D; colour/space sigma for BILATERAL;
+            noise std dev for DNCNN / DRUNET. Default 0.05.
 
     Returns float32 (H, W, 3) with the same value range.
     """
@@ -93,12 +141,25 @@ def denoise_image(
             ) from exc
 
         device = _best_torch_device()
-        # (H, W, 3) float32 → (1, 3, H, W) tensor on the chosen device
         t = torch.from_numpy(rgb.transpose(2, 0, 1)[np.newaxis]).to(device)
         ks = _bilateral_ksize(sigma)
-        # sigma_color: how strongly colour differences gate smoothing
-        # sigma_space: spatial reach in pixels (grows with sigma)
         result = KF.bilateral_blur(t, (ks, ks), sigma, (sigma * 10, sigma * 10))
+        return result[0].permute(1, 2, 0).cpu().numpy().astype(np.float32)
+
+    if kernel in (DenoiseKernel.DNCNN, DenoiseKernel.DRUNET):
+        try:
+            import torch
+        except ImportError as exc:
+            raise ImportError(
+                f"DenoiseKernel.{kernel.value.upper()} requires torch: "
+                "pip install 'shadow[denoise-gpu]'"
+            ) from exc
+
+        device = _best_torch_device()
+        model = _deepinv_model(kernel.value, device)
+        t = torch.from_numpy(rgb.transpose(2, 0, 1)[np.newaxis]).to(device)
+        with torch.no_grad():
+            result = model(t, sigma=sigma)
         return result[0].permute(1, 2, 0).cpu().numpy().astype(np.float32)
 
     raise ValueError(f"Unknown denoise kernel: {kernel!r}")  # pragma: no cover
