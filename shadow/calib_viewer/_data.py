@@ -23,6 +23,7 @@ class CalibData:
     black_level: float
     white_level: float
     device_model: str
+    extrinsics: dict[str, dict]               # camera → {R, t, camera_loc, is_movable, mirror_info}
 
 
 _CAM_ORDER = [
@@ -93,6 +94,94 @@ def load_calib_data(calib_dir: Path) -> CalibData:
 
                 if mc.HasField("vignetting") and cam not in vignetting:
                     vignetting[cam] = MessageToDict(mc.vignetting, preserving_proto_field_name=True)
+
+    # ── Extrinsics (rotation, translation, camera world positions) ───────────
+    # Access proto directly — MessageToDict loses sub-message structure for
+    # nested oneof fields like canonical / moveable_mirror.
+    extrinsics: dict[str, dict] = {}
+
+    if cal_path.exists():
+        raw = cal_path.read_bytes()
+        for block_start, hdr in iter_blocks(raw):
+            if hdr.msg_type != BlockType.LIGHT_HEADER:
+                continue
+            proto_bytes = raw[
+                block_start + hdr.msg_offset :
+                block_start + hdr.msg_offset + hdr.msg_len
+            ]
+            if not proto_bytes:
+                continue
+            try:
+                lh = _proto.parse_light_header(proto_bytes)
+            except Exception:
+                continue
+
+            for mc in lh.module_calibration:
+                cam = camera_id_pb2.CameraID.Name(mc.camera_id)
+                # Only process each camera once, and only if it has geometry
+                if cam in extrinsics or not mc.HasField("geometry"):
+                    continue
+                g = mc.geometry
+                mirror_type = int(g.mirror_type)  # 0=NONE, 1=GLUED, 2=MOVABLE
+                mirror_names = {0: "Fixed", 1: "Glued", 2: "Movable"}
+
+                for b in g.per_focus_calibration:
+                    if not b.HasField("extrinsics"):
+                        continue
+                    e = b.extrinsics
+                    entry: dict = {
+                        "mirror_type": mirror_names.get(mirror_type, str(mirror_type)),
+                        "is_movable": mirror_type == 2,
+                    }
+
+                    if e.HasField("canonical"):
+                        r = e.canonical.rotation
+                        t = e.canonical.translation
+                        R = [
+                            [r.x00, r.x01, r.x02],
+                            [r.x10, r.x11, r.x12],
+                            [r.x20, r.x21, r.x22],
+                        ]
+                        tvec = [t.x, t.y, t.z]
+                        # Camera world position = -R^T @ t
+                        loc = [
+                            -sum(R[j][i] * tvec[j] for j in range(3))
+                            for i in range(3)
+                        ]
+                        entry.update({
+                            "R": R,
+                            "t": tvec,
+                            "camera_loc": loc,
+                            "mirror_info": None,
+                        })
+
+                    elif e.HasField("moveable_mirror"):
+                        ms  = e.moveable_mirror.mirror_system
+                        mam = e.moveable_mirror.mirror_actuator_mapping
+                        loc = [
+                            ms.real_camera_location.x,
+                            ms.real_camera_location.y,
+                            ms.real_camera_location.z,
+                        ]
+                        entry.update({
+                            "R": None,
+                            "t": None,
+                            "camera_loc": loc,
+                            "mirror_info": {
+                                "rotation_axis": [
+                                    ms.rotation_axis.x,
+                                    ms.rotation_axis.y,
+                                    ms.rotation_axis.z,
+                                ],
+                                "actuator_length_offset": mam.actuator_length_offset,
+                                "actuator_length_scale":  mam.actuator_length_scale,
+                                "mirror_angle_offset":    mam.mirror_angle_offset,
+                                "mirror_angle_scale":     mam.mirror_angle_scale,
+                            },
+                        })
+
+                    extrinsics[cam] = entry
+                    break  # only one extrinsics bundle per camera
 
     # ── VST noise model ───────────────────────────────────────────────────────
     vst_entries = load_vst_model(calib_dir)
@@ -180,6 +269,7 @@ def load_calib_data(calib_dir: Path) -> CalibData:
         black_level=black_level,
         white_level=white_level,
         device_model=device_model,
+        extrinsics=extrinsics,
     )
 
 
