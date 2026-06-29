@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image as PILImage
 
 from shadow._debayer import DemosaicKernel
+from shadow._denoise import DenoiseKernel
 from shadow._types import (
     AwbGains,
     BayerPattern,
@@ -239,8 +240,10 @@ class RawImage:
         gamma: bool | float,
         exposure: float,
         apply_orientation: bool,
+        denoise: DenoiseKernel | None = None,
+        denoise_sigma: float = 0.05,
     ) -> np.ndarray:
-        """Shared debayer → normalise → CCM → exposure → gamma → orient → uint8 path."""
+        """Shared debayer → normalise → denoise → CCM → exposure → gamma → orient → uint8."""
         white = self.white_level if subtract_black else _10BIT_MAX
         rgb = self.to_debayered_numpy(
             half_res=half_res,
@@ -250,6 +253,11 @@ class RawImage:
             kernel=kernel,
         )
         normalized = (rgb / white).astype(np.float32)
+        if denoise is not None:
+            from shadow._denoise import denoise_image
+            # Clip before denoising: values must be in [0, 1] for BM3D.
+            np.clip(normalized, 0.0, 1.0, out=normalized)
+            normalized = denoise_image(normalized, denoise, sigma=denoise_sigma)
         if apply_ccm:
             # Clip to [0, 1] before the CCM. AWB gains > 1.0 can push saturated
             # channels above white_level; the forward_matrix's negative cross-terms
@@ -284,6 +292,8 @@ class RawImage:
         gamma: bool | float = True,
         exposure: float = 0.0,
         apply_orientation: bool = True,
+        denoise: DenoiseKernel | None = None,
+        denoise_sigma: float = 0.05,
     ) -> None:
         """Save as PNG.
 
@@ -300,6 +310,9 @@ class RawImage:
         exposure: EV stop adjustment applied before gamma (+1.0 = twice as bright)
         awb_gains_override: if provided, use these gains instead of the file's gains
         apply_orientation: True (default) honours flip_h/flip_v from the sensor proto.
+        denoise: optional denoising algorithm applied in linear light before CCM.
+                 Requires ``pip install shadow[denoise]``.
+        denoise_sigma: noise sigma for the denoiser (0.02 subtle – 0.15 heavy).
 
         Note: Pillow does not support 16-bit RGB PNG natively. Use to_tiff()
         for 16-bit per-channel debayered output.
@@ -316,6 +329,7 @@ class RawImage:
                 apply_awb=apply_awb, awb_gains_override=awb_gains_override,
                 apply_ccm=apply_ccm, kernel=kernel, gamma=gamma, exposure=exposure,
                 apply_orientation=apply_orientation,
+                denoise=denoise, denoise_sigma=denoise_sigma,
             )
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
@@ -333,14 +347,16 @@ class RawImage:
         gamma: bool | float = True,
         exposure: float = 0.0,
         apply_orientation: bool = True,
+        denoise: DenoiseKernel | None = None,
+        denoise_sigma: float = 0.05,
     ) -> None:
         """Save as TIFF.
 
         raw=True  → 16-bit grayscale Bayer TIFF (full bit depth, scaled to uint16)
         raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, CCM-corrected, gamma-encoded)
 
-        Same apply_ccm / kernel / gamma / exposure / awb_gains_override / apply_orientation
-        semantics as to_png().
+        Same apply_ccm / kernel / gamma / exposure / awb_gains_override / apply_orientation /
+        denoise / denoise_sigma semantics as to_png().
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
@@ -357,6 +373,7 @@ class RawImage:
                 apply_awb=apply_awb, awb_gains_override=awb_gains_override,
                 apply_ccm=apply_ccm, kernel=kernel, gamma=gamma, exposure=exposure,
                 apply_orientation=apply_orientation,
+                denoise=denoise, denoise_sigma=denoise_sigma,
             )
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 

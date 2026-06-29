@@ -14,6 +14,7 @@ Quick start::
     print(lris.depth_map.shape)
 """
 from shadow._debayer import DemosaicKernel
+from shadow._denoise import DenoiseKernel
 from shadow._lri import LriFile
 from shadow._lris import LrisFile
 from shadow._image import RawImage
@@ -44,6 +45,8 @@ __all__ = [
     "RawImage",
     # Demosaicing
     "DemosaicKernel",
+    # Denoising
+    "DenoiseKernel",
     # Enums and data types
     "CameraId",
     "SensorModel",

@@ -17,6 +17,10 @@ dev = ["grpcio-tools>=1.50"]
 # High-quality Bayer demosaicing algorithms (Malvar2004, Menon2007, DDFAPD).
 # Pulls in colour-science and scipy (~50 MB).
 demosaic = ["colour-demosaicing>=0.2.7"]
+# BM3D denoising (Block Matching 3D) — state-of-the-art classical denoiser (~5 MB).
+denoise = [
+    "bm3d>=4.0",
+]
 
 [project.scripts]
 shadow = "shadow.cli.main:cli"

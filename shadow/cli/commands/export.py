@@ -10,6 +10,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 
 import shadow
 from shadow._debayer import DemosaicKernel
+from shadow._denoise import DenoiseKernel
 from shadow._types import AwbGains, CameraId
 
 console = Console()
@@ -139,6 +140,28 @@ _GAMMA = _GammaParamType()
     ),
 )
 @click.option(
+    "--denoise", "denoise_kernel",
+    type=click.Choice(["bm3d"], case_sensitive=False),
+    default=None,
+    metavar="ALG",
+    help=(
+        "Denoising algorithm applied in linear light before colour correction. "
+        "'bm3d' = Block Matching 3D (requires pip install shadow[denoise]). "
+        "Ignored with --raw."
+    ),
+)
+@click.option(
+    "--denoise-sigma",
+    type=float,
+    default=0.05,
+    show_default=True,
+    metavar="SIGMA",
+    help=(
+        "Noise sigma for the denoiser (sigma_psd for BM3D). "
+        "Range: 0.02 (subtle) to 0.15 (heavy). Only used with --denoise."
+    ),
+)
+@click.option(
     "--awb-r",
     type=float,
     default=None,
@@ -166,6 +189,8 @@ def export(
     no_ccm: bool,
     no_awb: bool,
     no_orient: bool,
+    denoise_kernel: str | None,
+    denoise_sigma: float,
     awb_r: float | None,
     awb_b: float | None,
 ) -> None:
@@ -200,6 +225,7 @@ def export(
     apply_awb = not no_awb
     apply_orientation = not no_orient
     demosaic_kernel = DemosaicKernel(kernel)
+    denoise = DenoiseKernel(denoise_kernel) if denoise_kernel else None
 
     # Build AWB gains override if either channel was specified explicitly.
     awb_override: AwbGains | None = None
@@ -216,7 +242,7 @@ def export(
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
-    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, raw)
+    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, raw)
 
     with Progress(
         SpinnerColumn(),
@@ -238,6 +264,7 @@ def export(
                 apply_ccm=apply_ccm, kernel=demosaic_kernel,
                 gamma=gamma, exposure=exposure,
                 apply_orientation=apply_orientation,
+                denoise=denoise, denoise_sigma=denoise_sigma,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
@@ -261,6 +288,8 @@ def _print_settings(
     apply_ccm: bool,
     kernel: DemosaicKernel,
     apply_orientation: bool,
+    denoise: DenoiseKernel | None,
+    denoise_sigma: float,
     raw: bool,
 ) -> None:
     if raw:
@@ -276,6 +305,8 @@ def _print_settings(
         parts.append(f"AWB R={awb_override.r:.3f} B={awb_override.b:.3f}")
     if not apply_ccm:
         parts.append("CCM off")
+    if denoise is not None:
+        parts.append(f"denoise {denoise.value} sigma={denoise_sigma:.3f}")
     if not apply_orientation:
         parts.append("orient off")
     if gamma is False:
