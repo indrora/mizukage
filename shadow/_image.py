@@ -220,6 +220,7 @@ class RawImage:
         awb_gains_override: AwbGains | None = None,
         kernel: DemosaicKernel = DemosaicKernel.BILINEAR,
         hot_pixel_map: np.ndarray | None = None,
+        vignetting_grid: np.ndarray | None = None,
     ) -> np.ndarray:
         """Demosaic the raw Bayer data to an RGB array.
 
@@ -234,6 +235,10 @@ class RawImage:
                           MALVAR/MENON/DDFAPD require ``pip install shadow[demosaic]``.
                           half_res=True overrides to HALF regardless of kernel.
         hot_pixel_map   → optional uint8 (H, W) mask; passed to to_raw_numpy().
+        vignetting_grid → optional float32 (grid_h, grid_w) correction factors from
+                          load_vignetting_grid(); applied after float conversion and
+                          BEFORE AWB gains so each raw Bayer pixel is multiplied by
+                          its per-camera factory correction factor.
         """
         from shadow._debayer import debayer_half, debayer_bilinear, debayer_colour
 
@@ -253,12 +258,21 @@ class RawImage:
         if gains is not None:
             b_row, b_col = 1 - r_row, 1 - r_col
             bayer = raw.astype(np.float32)
+            # Apply vignetting correction before AWB so each raw pixel is scaled
+            # by its per-camera factory correction factor first.
+            if vignetting_grid is not None:
+                from shadow._calib import apply_vignetting_correction
+                bayer = apply_vignetting_correction(bayer, vignetting_grid)
             bayer[r_row::2, r_col::2] *= gains.r
             bayer[r_row::2, b_col::2] *= gains.gr
             bayer[b_row::2, r_col::2] *= gains.gb
             bayer[b_row::2, b_col::2] *= gains.b
         else:
             bayer = raw.astype(np.float32)
+            # Apply vignetting correction even when AWB is skipped.
+            if vignetting_grid is not None:
+                from shadow._calib import apply_vignetting_correction
+                bayer = apply_vignetting_correction(bayer, vignetting_grid)
 
         if half_res:
             return debayer_half(bayer, r_row, r_col)
@@ -311,6 +325,7 @@ class RawImage:
         on_step: Callable[[str], None] | None = None,
         on_advance: Callable[[int], None] | None = None,
         hot_pixel_map: np.ndarray | None = None,
+        vignetting_grid: np.ndarray | None = None,
     ) -> np.ndarray:
         """Shared debayer → normalise → denoise → CCM → exposure → gamma → orient → uint8."""
         _step = on_step if on_step is not None else lambda _: None
@@ -325,6 +340,7 @@ class RawImage:
             awb_gains_override=awb_gains_override,
             kernel=kernel,
             hot_pixel_map=hot_pixel_map,
+            vignetting_grid=vignetting_grid,
         )
         normalized = (rgb / white).astype(np.float32)
         _adv(1)
@@ -390,6 +406,7 @@ class RawImage:
         on_step: Callable[[str], None] | None = None,
         on_advance: Callable[[int], None] | None = None,
         hot_pixel_map: np.ndarray | None = None,
+        vignetting_grid: np.ndarray | None = None,
     ) -> None:
         """Save as PNG.
 
@@ -416,6 +433,9 @@ class RawImage:
                     per tile for DnCNN/DRUNet or once per stage for all other kernels.
         hot_pixel_map: optional uint8 (H, W) mask from load_hot_pixel_map(); when provided,
                        defective pixels are corrected before demosaicing.
+        vignetting_grid: optional float32 (grid_h, grid_w) correction factors from
+                         load_vignetting_grid(); applied per-pixel before AWB gains.
+                         Ignored with raw=True.
 
         Note: Pillow does not support 16-bit RGB PNG natively. Use to_tiff()
         for 16-bit per-channel debayered output.
@@ -440,6 +460,7 @@ class RawImage:
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
                 hot_pixel_map=hot_pixel_map,
+                vignetting_grid=vignetting_grid,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)
@@ -465,6 +486,7 @@ class RawImage:
         on_step: Callable[[str], None] | None = None,
         on_advance: Callable[[int], None] | None = None,
         hot_pixel_map: np.ndarray | None = None,
+        vignetting_grid: np.ndarray | None = None,
     ) -> None:
         """Save as TIFF.
 
@@ -472,8 +494,8 @@ class RawImage:
         raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, CCM-corrected, gamma-encoded)
 
         Same apply_ccm / kernel / gamma / exposure / awb_gains_override / apply_orientation /
-        denoise / denoise_sigma / denoise_tile_size / on_step / on_advance / hot_pixel_map
-        semantics as to_png().
+        denoise / denoise_sigma / denoise_tile_size / on_step / on_advance / hot_pixel_map /
+        vignetting_grid semantics as to_png().
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
@@ -498,6 +520,7 @@ class RawImage:
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
                 hot_pixel_map=hot_pixel_map,
+                vignetting_grid=vignetting_grid,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)

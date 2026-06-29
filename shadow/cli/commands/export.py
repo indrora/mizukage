@@ -302,9 +302,10 @@ def export(
 
     _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, denoise_tile_size, raw, calib_dir)
 
-    # Cache for hot-pixel maps: loaded once per camera_id to avoid re-parsing
-    # the calibration file on every image in a multi-camera export.
+    # Caches for per-camera calibration data: loaded once per camera_id to avoid
+    # re-parsing the calibration file on every image in a multi-camera export.
     hp_cache: dict[CameraId, object] = {}
+    vig_cache: dict[CameraId, object] = {}
 
     desc_col = TextColumn(
         "{task.description}",
@@ -352,14 +353,21 @@ def export(
             def on_advance(n: int, _task=image_task) -> None:
                 progress.advance(_task, n)
 
-            # Resolve hot-pixel map for this camera (lazy, cached per camera_id).
+            # Resolve hot-pixel map and vignetting grid for this camera
+            # (lazy, cached per camera_id to avoid redundant file parsing).
             hot_pixel_map = None
+            vignetting_grid = None
             if calib_dir is not None:
                 cam_id = img.camera_id
                 if cam_id not in hp_cache:
                     from shadow._calib import load_hot_pixel_map
                     hp_cache[cam_id] = load_hot_pixel_map(Path(calib_dir), cam_id)
                 hot_pixel_map = hp_cache[cam_id]
+
+                if cam_id not in vig_cache:
+                    from shadow._calib import load_vignetting_grid
+                    vig_cache[cam_id] = load_vignetting_grid(Path(calib_dir), cam_id)
+                vignetting_grid = vig_cache[cam_id]
 
             kw = dict(
                 raw=raw, half_res=half_res, subtract_black=subtract_black,
@@ -371,6 +379,7 @@ def export(
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
                 hot_pixel_map=hot_pixel_map,
+                vignetting_grid=vignetting_grid,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
@@ -426,7 +435,7 @@ def _print_settings(
     else:
         parts.append(f"gamma {float(gamma):.2f}")
     if calib_dir is not None:
-        parts.append("hot-pixel correction on")
+        parts.append("hot-pixel + vignetting correction on")
     if parts:
         console.print(f"  [dim]Settings: {', '.join(parts)}[/dim]")
 
