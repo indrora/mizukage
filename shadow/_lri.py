@@ -125,11 +125,14 @@ class LriFile:
                 # Skip corrupt or unrecognised blocks rather than crashing
                 continue
 
-        # Back-fill sensor models and color profiles now that all blocks are read
+        # Back-fill fields that arrive in later blocks than the pixel data.
+        # sensor_data (black_level) and hw_info (sensor models) are in blocks
+        # that appear AFTER the camera-module pixel blocks in every observed LRI.
         images: list[RawImage] = sorted(
             images_by_cam.values(), key=lambda img: img.camera_id
         )
         for img in images:
+            img._black_level = black_level  # correct value now that all blocks are read
             if img.sensor_model == SensorModel.UNKNOWN and img.camera_id in sensor_id_map:
                 img.sensor_model = sensor_id_map[img.camera_id]
             if img.camera_id in color_profiles_by_cam:
