@@ -76,7 +76,7 @@ def update(data: "CalibData", camera: str) -> None:
             width=-80,
             no_mouse_pos=True,
             no_title=False,
-        ):
+        ) as hp_plot:
             dpg.add_plot_axis(
                 dpg.mvXAxis,
                 label=f"col (0-{_GRID_W-1})",
@@ -101,7 +101,7 @@ def update(data: "CalibData", camera: str) -> None:
                     bounds_min=(0, 0),
                     bounds_max=(_GRID_W, _GRID_H),
                 )
-            dpg.bind_colormap(dpg.last_container(), dpg.mvPlotColormap_Plasma)
+        dpg.bind_colormap(hp_plot, dpg.mvPlotColormap_Plasma)
 
         dpg.add_colormap_scale(
             colormap=dpg.mvPlotColormap_Plasma,
