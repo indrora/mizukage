@@ -52,6 +52,31 @@ def _apply_forward_matrix(rgb: np.ndarray, forward_matrix: tuple[float, ...]) ->
     return srgb.reshape(h, w, 3)
 
 
+def _best_color_profile(
+    profiles: list[ColorProfile],
+    awb_gains: AwbGains | None,
+) -> ColorProfile | None:
+    """Select the factory colour profile whose neutral point best matches AWB.
+
+    When AWB gains are available, compute the capture neutral point as:
+        rg_capture = r / gr
+        bg_capture = b / gb
+    and return the profile with the smallest Euclidean distance to that point
+    in (rg, bg) space.
+
+    When AWB gains are absent, prefer D65 and fall back to the first profile.
+    This preserves backward-compatible behaviour for callers with apply_awb=False.
+    """
+    if not profiles:
+        return None
+    if awb_gains is None:
+        # No AWB info — prefer D65, fall back to first available
+        return next((p for p in profiles if p.illuminant == Illuminant.D65), profiles[0])
+    rg = awb_gains.r / awb_gains.gr
+    bg = awb_gains.b / awb_gains.gb
+    return min(profiles, key=lambda p: (p.rg_ratio - rg) ** 2 + (p.bg_ratio - bg) ** 2)
+
+
 def _apply_gamma(normalized: np.ndarray, gamma: bool | float) -> np.ndarray:
     """Apply a gamma/tone curve to a float32 array already normalised to [0..1].
 
@@ -327,10 +352,13 @@ class RawImage:
             # then collapse G (e.g. FM([1.92, 1.0, 1.76]) → sRGB G≈0.26 = pink).
             # Clipping first ensures saturated highlights render as white, not magenta.
             np.clip(normalized, 0.0, 1.0, out=normalized)
-            # Prefer the D65 profile; fall back to any available illuminant.
-            prof = self.color_profile(Illuminant.D65)
-            if prof is None and self.color_profiles:
-                prof = self.color_profiles[0]
+            # Reuse the same AWB gains that drove demosaicing to select the factory
+            # colour profile whose calibrated neutral point is closest to the capture.
+            # When AWB was not applied (gains is None), fall back to D65 → first.
+            gains = awb_gains_override if awb_gains_override is not None else (
+                self.awb_gains if apply_awb else None
+            )
+            prof = _best_color_profile(self.color_profiles, gains)
             if prof is not None:
                 normalized = _apply_forward_matrix(normalized, prof.forward_matrix)
         if exposure != 0.0:
