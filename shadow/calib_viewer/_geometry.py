@@ -122,3 +122,54 @@ def update(data: "CalibData", camera: str) -> None:
             else:
                 # Distortion might be a nested message
                 dpg.add_text(str(dist_d))
+
+        # ── Extrinsics ────────────────────────────────────────────────────────
+        ext = data.extrinsics.get(camera)
+        if ext:
+            dpg.add_separator()
+            dpg.add_text("Extrinsics", color=[200, 200, 100])
+            dpg.add_text(f"Mirror: {ext['mirror_type']}")
+
+            loc = ext.get("camera_loc")
+            if loc:
+                dpg.add_text(
+                    f"Camera world position: [{loc[0]:.2f}, {loc[1]:.2f}, {loc[2]:.2f}] mm"
+                )
+
+            R = ext.get("R")
+            if R is not None:
+                tvec = ext["t"]
+                dpg.add_text(
+                    f"Translation: [{tvec[0]:.3f}, {tvec[1]:.3f}, {tvec[2]:.3f}] mm"
+                )
+                dpg.add_text("Rotation matrix (world→cam):", color=[160, 160, 160])
+                # 3×3 table; cells colour-coded: bright green near +1, red near -1, grey near 0
+                with dpg.table(
+                    header_row=False,
+                    borders_innerH=True,
+                    borders_innerV=True,
+                    borders_outerH=True,
+                    borders_outerV=True,
+                ):
+                    for _ in range(3):
+                        dpg.add_table_column()
+                    for row in R:
+                        with dpg.table_row():
+                            for v in row:
+                                abs_v = abs(v)
+                                if abs_v > 0.5:
+                                    col = [80, 200, 80, 255] if v > 0 else [220, 80, 80, 255]
+                                else:
+                                    col = [140, 140, 140, 255]
+                                dpg.add_text(f"{v:+.4f}", color=col)
+
+            mi = ext.get("mirror_info")
+            if mi:
+                ax = mi["rotation_axis"]
+                dpg.add_text(
+                    f"Rotation axis: [{ax[0]:.4f}, {ax[1]:.4f}, {ax[2]:.4f}]"
+                )
+                dpg.add_text(
+                    f"Mirror angle: offset={mi['mirror_angle_offset']:.2f}°"
+                    f"  scale={mi['mirror_angle_scale']:.4f}°/unit"
+                )
