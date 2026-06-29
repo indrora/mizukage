@@ -199,6 +199,17 @@ _GAMMA = _GammaParamType()
     metavar="GAIN",
     help="Override the blue AWB gain (e.g. 1.76). Ignored with --no-awb or --raw.",
 )
+@click.option(
+    "--calib",
+    "calib_dir",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    metavar="DIR",
+    help=(
+        "Path to a lightcal directory. When provided, hot-pixel maps from "
+        "hotpixel.rec are applied to each camera before demosaicing."
+    ),
+)
 def export(
     file: str,
     out_dir: str,
@@ -218,6 +229,7 @@ def export(
     denoise_tile_size: int,
     awb_r: float | None,
     awb_b: float | None,
+    calib_dir: str | None,
 ) -> None:
     """Export camera module images from an LRI file.
 
@@ -235,6 +247,7 @@ def export(
         shadow export photo.lri ./out --exposure +1.5
         shadow export photo.lri ./out --gamma 2.2 --awb-r 2.0 --awb-b 1.8
         shadow export photo.lri ./out --gamma linear
+        shadow export photo.lri ./out --camera B4 --calib images/lightcal
     """
     lri = shadow.open_lri(file)
     out = Path(out_dir)
@@ -267,7 +280,11 @@ def export(
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
-    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, denoise_tile_size, raw)
+    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, denoise_tile_size, raw, calib_dir)
+
+    # Cache for hot-pixel maps: loaded once per camera_id to avoid re-parsing
+    # the calibration file on every image in a multi-camera export.
+    hp_cache: dict[CameraId, object] = {}
 
     desc_col = TextColumn(
         "{task.description}",
@@ -302,6 +319,15 @@ def export(
             def on_advance(n: int, _task=image_task) -> None:
                 progress.advance(_task, n)
 
+            # Resolve hot-pixel map for this camera (lazy, cached per camera_id).
+            hot_pixel_map = None
+            if calib_dir is not None:
+                cam_id = img.camera_id
+                if cam_id not in hp_cache:
+                    from shadow._calib import load_hot_pixel_map
+                    hp_cache[cam_id] = load_hot_pixel_map(Path(calib_dir), cam_id)
+                hot_pixel_map = hp_cache[cam_id]
+
             kw = dict(
                 raw=raw, half_res=half_res, subtract_black=subtract_black,
                 apply_awb=apply_awb, awb_gains_override=awb_override,
@@ -311,6 +337,7 @@ def export(
                 denoise=denoise, denoise_sigma=denoise_sigma,
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
+                hot_pixel_map=hot_pixel_map,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
@@ -339,6 +366,7 @@ def _print_settings(
     denoise_sigma: float,
     denoise_tile_size: int,
     raw: bool,
+    calib_dir: str | None = None,
 ) -> None:
     if raw:
         return
@@ -364,6 +392,8 @@ def _print_settings(
         parts.append("gamma sRGB")
     else:
         parts.append(f"gamma {float(gamma):.2f}")
+    if calib_dir is not None:
+        parts.append("hot-pixel correction on")
     if parts:
         console.print(f"  [dim]Settings: {', '.join(parts)}[/dim]")
 

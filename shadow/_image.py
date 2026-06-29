@@ -132,12 +132,22 @@ class RawImage:
 
     # ── Numpy access ─────────────────────────────────────────────────────────
 
-    def to_raw_numpy(self, *, subtract_black: bool = True) -> np.ndarray:
+    def to_raw_numpy(
+        self,
+        *,
+        subtract_black: bool = True,
+        hot_pixel_map: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Unpack raw Bayer/mono pixel data → uint16 array (height, width).
 
         No demosaicing is performed. Values are in [0..1023] (10-bit).
         With subtract_black=True (default), the black level is subtracted and
         the result is clipped to [0..white_level].
+
+        hot_pixel_map: optional uint8 (H, W) mask from load_hot_pixel_map().
+            When provided (and the sensor is a Bayer sensor), defective pixels
+            are replaced with the bilinear mean of their same-channel neighbours
+            *before* black-level subtraction.
         """
         from shadow._unpack import unpack_10bpp, decode_bjpg
 
@@ -162,6 +172,14 @@ class RawImage:
             case _:
                 raise NotImplementedError(f"Unsupported raw format: {self.raw_format!r}")
 
+        # Apply hot-pixel correction on the raw Bayer array before any other
+        # processing.  Mono sensors have no Bayer pattern so we skip them.
+        if hot_pixel_map is not None and self.bayer_r_row is not None:
+            from shadow._calib import apply_hot_pixel_correction
+            arr = apply_hot_pixel_correction(
+                arr, hot_pixel_map, self.bayer_r_row, self.bayer_r_col
+            )
+
         if subtract_black:
             bl = int(self._black_level)
             arr = np.clip(arr.astype(np.int32) - bl, 0, _10BIT_MAX - bl).astype(np.uint16)
@@ -176,6 +194,7 @@ class RawImage:
         apply_awb: bool = True,
         awb_gains_override: AwbGains | None = None,
         kernel: DemosaicKernel = DemosaicKernel.BILINEAR,
+        hot_pixel_map: np.ndarray | None = None,
     ) -> np.ndarray:
         """Demosaic the raw Bayer data to an RGB array.
 
@@ -189,10 +208,11 @@ class RawImage:
         kernel          → demosaicing algorithm; see DemosaicKernel for choices.
                           MALVAR/MENON/DDFAPD require ``pip install shadow[demosaic]``.
                           half_res=True overrides to HALF regardless of kernel.
+        hot_pixel_map   → optional uint8 (H, W) mask; passed to to_raw_numpy().
         """
         from shadow._debayer import debayer_half, debayer_bilinear, debayer_colour
 
-        raw = self.to_raw_numpy(subtract_black=subtract_black)
+        raw = self.to_raw_numpy(subtract_black=subtract_black, hot_pixel_map=hot_pixel_map)
 
         if self.is_mono or self.bayer_r_row is None:
             rgb = np.stack([raw, raw, raw], axis=2)
@@ -265,6 +285,7 @@ class RawImage:
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
         on_advance: Callable[[int], None] | None = None,
+        hot_pixel_map: np.ndarray | None = None,
     ) -> np.ndarray:
         """Shared debayer → normalise → denoise → CCM → exposure → gamma → orient → uint8."""
         _step = on_step if on_step is not None else lambda _: None
@@ -278,6 +299,7 @@ class RawImage:
             apply_awb=apply_awb,
             awb_gains_override=awb_gains_override,
             kernel=kernel,
+            hot_pixel_map=hot_pixel_map,
         )
         normalized = (rgb / white).astype(np.float32)
         _adv(1)
@@ -332,6 +354,7 @@ class RawImage:
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
         on_advance: Callable[[int], None] | None = None,
+        hot_pixel_map: np.ndarray | None = None,
     ) -> None:
         """Save as PNG.
 
@@ -356,6 +379,8 @@ class RawImage:
         on_step: optional callback invoked with a stage label at each pipeline step.
         on_advance: optional callback invoked with the number of ops completed; called once
                     per tile for DnCNN/DRUNet or once per stage for all other kernels.
+        hot_pixel_map: optional uint8 (H, W) mask from load_hot_pixel_map(); when provided,
+                       defective pixels are corrected before demosaicing.
 
         Note: Pillow does not support 16-bit RGB PNG natively. Use to_tiff()
         for 16-bit per-channel debayered output.
@@ -366,7 +391,7 @@ class RawImage:
         if raw:
             _step("saving")
             white = self.white_level if subtract_black else _10BIT_MAX
-            arr = self.to_raw_numpy(subtract_black=subtract_black)
+            arr = self.to_raw_numpy(subtract_black=subtract_black, hot_pixel_map=hot_pixel_map)
             scaled = (arr.astype(np.float32) * (65535.0 / white)).clip(0, 65535).astype(np.uint16)
             PILImage.fromarray(scaled).save(path)
             _adv(1)
@@ -379,6 +404,7 @@ class RawImage:
                 denoise=denoise, denoise_sigma=denoise_sigma,
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
+                hot_pixel_map=hot_pixel_map,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)
@@ -403,6 +429,7 @@ class RawImage:
         denoise_tile_size: int = 512,
         on_step: Callable[[str], None] | None = None,
         on_advance: Callable[[int], None] | None = None,
+        hot_pixel_map: np.ndarray | None = None,
     ) -> None:
         """Save as TIFF.
 
@@ -410,7 +437,8 @@ class RawImage:
         raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, CCM-corrected, gamma-encoded)
 
         Same apply_ccm / kernel / gamma / exposure / awb_gains_override / apply_orientation /
-        denoise / denoise_sigma / denoise_tile_size / on_step / on_advance semantics as to_png().
+        denoise / denoise_sigma / denoise_tile_size / on_step / on_advance / hot_pixel_map
+        semantics as to_png().
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
@@ -421,7 +449,7 @@ class RawImage:
         if raw:
             _step("saving")
             white = self.white_level if subtract_black else _10BIT_MAX
-            arr = self.to_raw_numpy(subtract_black=subtract_black)
+            arr = self.to_raw_numpy(subtract_black=subtract_black, hot_pixel_map=hot_pixel_map)
             scaled = (arr.astype(np.float32) * (65535.0 / white)).clip(0, 65535).astype(np.uint16)
             PILImage.fromarray(scaled).save(path)
             _adv(1)
@@ -434,6 +462,7 @@ class RawImage:
                 denoise=denoise, denoise_sigma=denoise_sigma,
                 denoise_tile_size=denoise_tile_size,
                 on_step=on_step, on_advance=on_advance,
+                hot_pixel_map=hot_pixel_map,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)
