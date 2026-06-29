@@ -26,6 +26,10 @@ denoise = [
 # Works on NVIDIA CUDA, AMD ROCm, DirectML (Windows), Apple MPS, and CPU.
 # DnCNN / DRUNet download pretrained weights (~3 MB / ~37 MB) on first use.
 denoise-gpu = ["kornia>=0.7", "torch>=2.0", "deepinv>=0.2"]
+# Interactive calibration data viewer (requires a display).
+explorer = [
+    "dearpygui>=1.11",
+]
 
 [project.scripts]
 shadow = "shadow.cli.main:cli"
