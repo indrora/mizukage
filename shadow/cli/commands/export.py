@@ -18,7 +18,8 @@ from rich.progress import (
 from rich.table import Column
 
 import shadow
-from shadow._calib import compute_scalar_sigma, load_vst_model
+from shadow._calib import compute_scalar_sigma, load_distortion_params, load_vst_model
+from shadow._calib import DistortionParams
 from shadow._debayer import DemosaicKernel
 from shadow._denoise import DenoiseKernel
 from shadow._types import AwbGains, CameraId
@@ -217,6 +218,16 @@ _GAMMA = _GammaParamType()
         "--denoise, the factory VST noise model sets per-camera sigma automatically."
     ),
 )
+@click.option(
+    "--undistort",
+    is_flag=True,
+    default=False,
+    help=(
+        "Apply factory lens distortion correction (requires --calib). "
+        "Reads the radial polynomial from calibration.lri and applies an "
+        "inverse-map undistortion in linear light before gamma encoding."
+    ),
+)
 def export(
     file: str,
     out_dir: str,
@@ -237,6 +248,7 @@ def export(
     awb_r: float | None,
     awb_b: float | None,
     calib_dir: str | None,
+    undistort: bool,
 ) -> None:
     """Export camera module images from an LRI file.
 
@@ -285,6 +297,13 @@ def export(
             "falling back to --denoise-sigma.[/yellow]"
         )
 
+    # Warn early if undistortion was requested without a calibration directory.
+    if undistort and calib_dir is None:
+        console.print(
+            "[yellow]Warning: --undistort requires --calib; "
+            "lens undistortion will be skipped.[/yellow]"
+        )
+
     # Build AWB gains override if either channel was specified explicitly.
     awb_override: AwbGains | None = None
     if apply_awb and (awb_r is not None or awb_b is not None):
@@ -300,12 +319,14 @@ def export(
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
-    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, denoise_tile_size, raw, calib_dir)
+    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, denoise_tile_size, raw, calib_dir, undistort)
 
     # Caches for per-camera calibration data: loaded once per camera_id to avoid
     # re-parsing the calibration file on every image in a multi-camera export.
     hp_cache: dict[CameraId, object] = {}
     vig_cache: dict[CameraId, object] = {}
+    # Cache for per-camera distortion params (None = no data available).
+    dp_cache: dict[CameraId, DistortionParams | None] = {}
 
     desc_col = TextColumn(
         "{task.description}",
@@ -369,6 +390,19 @@ def export(
                     vig_cache[cam_id] = load_vignetting_grid(Path(calib_dir), cam_id)
                 vignetting_grid = vig_cache[cam_id]
 
+                if cam_id not in dp_cache:
+                    from shadow._calib import load_distortion_params
+                    dp_cache[cam_id] = load_distortion_params(Path(calib_dir), cam_id)
+
+            distortion_params: DistortionParams | None = None
+            if undistort and calib_dir is not None:
+                distortion_params = dp_cache.get(img.camera_id)
+                if distortion_params is None:
+                    console.print(
+                        f"  [yellow]Warning: no distortion params for "
+                        f"{img.camera_id.name}; skipping undistortion.[/yellow]"
+                    )
+
             kw = dict(
                 raw=raw, half_res=half_res, subtract_black=subtract_black,
                 apply_awb=apply_awb, awb_gains_override=awb_override,
@@ -380,6 +414,8 @@ def export(
                 on_step=on_step, on_advance=on_advance,
                 hot_pixel_map=hot_pixel_map,
                 vignetting_grid=vignetting_grid,
+                undistort=undistort and distortion_params is not None,
+                distortion_params=distortion_params,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
@@ -409,6 +445,7 @@ def _print_settings(
     denoise_tile_size: int,
     raw: bool,
     calib_dir: str | None = None,
+    undistort: bool = False,
 ) -> None:
     if raw:
         return
@@ -436,6 +473,8 @@ def _print_settings(
         parts.append(f"gamma {float(gamma):.2f}")
     if calib_dir is not None:
         parts.append("hot-pixel + vignetting correction on")
+    if undistort and calib_dir is not None:
+        parts.append("lens undistortion on")
     if parts:
         console.print(f"  [dim]Settings: {', '.join(parts)}[/dim]")
 
