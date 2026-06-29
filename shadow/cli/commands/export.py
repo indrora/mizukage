@@ -6,7 +6,15 @@ from pathlib import Path
 
 import click
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 import shadow
 from shadow._debayer import DemosaicKernel
@@ -262,17 +270,25 @@ def export(
 
     with Progress(
         SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
+        TextColumn("{task.description}"),
         BarColumn(),
-        TaskProgressColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Exporting...", total=len(images))
+        # Row 1: per-image stage (indeterminate pulse bar, no total)
+        image_task = progress.add_task("", total=None)
+        # Row 2: overall batch (solid bar with count)
+        batch_task = progress.add_task(
+            f"[bold]batch[/bold]", total=len(images)
+        )
 
         for img in images:
             name = img.camera_id.name
             dest = out / f"{name}{suffix}{ext}"
-            progress.update(task, description=f"Exporting {name}")
+
+            def on_step(stage: str, _n: str = name) -> None:
+                progress.update(image_task, description=f"[bold]{_n}[/bold] {stage}")
 
             kw = dict(
                 raw=raw, half_res=half_res, subtract_black=subtract_black,
@@ -282,13 +298,15 @@ def export(
                 apply_orientation=apply_orientation,
                 denoise=denoise, denoise_sigma=denoise_sigma,
                 denoise_tile_size=denoise_tile_size,
+                on_step=on_step,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
             else:
                 img.to_png(dest, **kw)
 
-            progress.advance(task)
+            progress.update(image_task, description=f"[dim]  {name} done[/dim]")
+            progress.advance(batch_task)
 
     ref_name = lri.metadata.reference_camera.name if lri.metadata.reference_camera else "—"
     console.print(

@@ -109,50 +109,36 @@ def _deepinv_model(name: str, device) -> Any:
 def _tile_denoise(model_fn, t: "torch.Tensor", tile: int, overlap: int) -> "torch.Tensor":
     """Run a denoising model in overlapping tiles to stay within VRAM limits.
 
-    Tiles are generated with the given step (tile - overlap). For each tile
-    the model runs on the full patch, but only the interior (excluding
-    overlap//2 on each non-edge side) is written to the output to avoid
-    seam artefacts from border effects in the model.
+    Write regions are non-overlapping strides of (tile - overlap), guaranteeing
+    every pixel is written exactly once with no gaps. Each write region is extended
+    outward by overlap//2 pixels on each side (clamped at image edges) to give the
+    model boundary context and prevent seam artefacts.
 
     model_fn: callable (patch: Tensor[1,C,H,W]) → Tensor[1,C,H,W]
     t:        input tensor, shape (1, C, H, W), on the target device
     tile:     spatial size of each square tile (pixels)
-    overlap:  overlap strip width (pixels); must be even
+    overlap:  context strip added on each side of the write region (pixels, even)
     """
     import torch
 
     _, C, H, W = t.shape
     step = tile - overlap
     half = overlap // 2
-
-    def _tile_starts(length: int) -> list[int]:
-        if length <= tile:
-            return [0]
-        pts = list(range(0, length - tile, step))
-        pts.append(length - tile)       # always include the trailing tile
-        return sorted(set(pts))
-
-    ys = _tile_starts(H)
-    xs = _tile_starts(W)
-
     out = torch.zeros_like(t)
 
-    for i, y0 in enumerate(ys):
-        y1 = min(y0 + tile, H)
-        for j, x0 in enumerate(xs):
-            x1 = min(x0 + tile, W)
+    for wy0 in range(0, H, step):
+        wy1 = min(wy0 + step, H)
+        ty0, ty1 = max(0, wy0 - half), min(H, wy1 + half)
+        ry0, ry1 = wy0 - ty0, wy0 - ty0 + (wy1 - wy0)
 
-            patch = t[:, :, y0:y1, x0:x1]
+        for wx0 in range(0, W, step):
+            wx1 = min(wx0 + step, W)
+            tx0, tx1 = max(0, wx0 - half), min(W, wx1 + half)
+            rx0, rx1 = wx0 - tx0, wx0 - tx0 + (wx1 - wx0)
+
+            patch = t[:, :, ty0:ty1, tx0:tx1]
             p_out = model_fn(patch)
-
-            # Crop strip to keep: skip overlap/2 on all interior (non-edge) sides
-            iy0 = half if i > 0 else 0
-            ix0 = half if j > 0 else 0
-            iy1 = (y1 - y0) - (half if i < len(ys) - 1 else 0)
-            ix1 = (x1 - x0) - (half if j < len(xs) - 1 else 0)
-
-            out[:, :, y0 + iy0:y0 + iy1, x0 + ix0:x0 + ix1] = \
-                p_out[:, :, iy0:iy1, ix0:ix1]
+            out[:, :, wy0:wy1, wx0:wx1] = p_out[:, :, ry0:ry1, rx0:rx1]
 
     return out
 
