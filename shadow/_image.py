@@ -222,12 +222,18 @@ class RawImage:
     # ── File export ───────────────────────────────────────────────────────────
 
     def _orient(self, arr: np.ndarray) -> np.ndarray:
-        """Apply sensor flip flags to a 2-D or 3-D array (H, W[, C])."""
-        if self.flip_h:
-            arr = np.fliplr(arr)
-        if self.flip_v:
-            arr = np.flipud(arr)
-        return arr
+        """Apply 180° rotation to correct for sensor physical mounting.
+
+        All L16 sensors are physically mounted upside-down relative to the
+        natural viewing direction.  The proto sensor_is_horizontal_flip /
+        sensor_is_vertical_flip fields are never set in practice (always
+        default False); the reference implementation (prism) applies a
+        rotate_180 unconditionally on every image.
+
+        np.ascontiguousarray ensures PIL can consume the result without
+        stride surprises after the double-axis reversal.
+        """
+        return np.ascontiguousarray(arr[::-1, ::-1])
 
     def _export_rgb8(
         self,
