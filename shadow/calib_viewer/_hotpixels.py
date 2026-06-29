@@ -35,17 +35,20 @@ def _bitmap_to_rgba(bitmap: np.ndarray) -> list[float]:
     from PIL import Image
 
     H, W = bitmap.shape
-    # Normalise to 0–255 based on max possible value (7) so severity is visible.
-    scaled = np.clip(bitmap.astype(np.float32) / 7.0 * 255, 0, 255).astype(np.uint8)
-    img = Image.fromarray(scaled, mode="L")
+    # Use binary mask (any severity counts) so downsampling gives local defect
+    # *fraction* 0.0-1.0 per display pixel.  With ~12% overall density,
+    # saturating at 20% (t=1.0) makes the map vividly visible.
+    binary = (bitmap > 0).astype(np.uint8) * 255
+    img = Image.fromarray(binary, mode="L")
     img = img.resize((_DISP_W, _DISP_H), Image.BILINEAR)
-    density = np.array(img, dtype=np.float32) / 255.0  # 0.0–1.0 per display pixel
+    density = np.array(img, dtype=np.float32) / 255.0  # fraction 0.0-1.0
 
-    # Dark-grey → orange → red colour ramp
+    # Ramp saturates at 20% density: dark-grey (0%) -> red (>=20%)
+    t = np.clip(density * 5.0, 0.0, 1.0)
     rgba = np.empty((_DISP_H, _DISP_W, 4), dtype=np.float32)
-    rgba[:, :, 0] = np.clip(0.08 + 0.92 * density * 4, 0, 1)   # R ramps up fast
-    rgba[:, :, 1] = np.clip(0.08 + 0.30 * density * 2 - density * 0.5, 0, 1)  # G slight orange then drops
-    rgba[:, :, 2] = np.clip(0.08 * (1 - density * 4), 0, 1)     # B fades out
+    rgba[:, :, 0] = 0.08 + 0.92 * t   # R: dark grey -> bright red
+    rgba[:, :, 1] = np.clip(0.08 - 0.07 * t, 0, 1)
+    rgba[:, :, 2] = np.clip(0.08 - 0.07 * t, 0, 1)
     rgba[:, :, 3] = 1.0
     return rgba.flatten().tolist()
 
@@ -88,7 +91,7 @@ def build(data: "CalibData", init_camera: str | None) -> None:
         pct      = n_defect / total * 100
         dpg.add_text(
             f"{n_defect:,} defective pixels  ({pct:.3f}%)  —  sensor {bitmap.shape[1]}×{bitmap.shape[0]}"
-            f"  severity 1–{int(bitmap.max())}",
+            f"  severity 1-{int(bitmap.max())}",
             tag=_TAG_STATS,
         )
     else:
@@ -120,7 +123,7 @@ def update(data: "CalibData", camera: str) -> None:
     dpg.set_value(
         _TAG_STATS,
         f"{n_defect:,} defective pixels  ({pct:.3f}%)  —  sensor {bitmap.shape[1]}×{bitmap.shape[0]}"
-        f"  severity 1–{int(bitmap.max())}",
+        f"  severity 1-{int(bitmap.max())}",
     )
     dpg.set_value(_TAG_MEAS, _meas_lines(stats))
 
