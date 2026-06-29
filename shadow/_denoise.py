@@ -1,6 +1,6 @@
 """Denoising algorithms for post-demosaic linear RGB images.
 
-Built-in:   none (denoising is always an optional enhancement)
+Built-in:   BILATERAL_SPATIAL (pure numpy, no extra deps)
 Optional:
   shadow[denoise]     — BM3D (CPU, high quality)
   shadow[denoise-gpu] — bilateral / DnCNN / DRUNet via kornia + deepinv + PyTorch
@@ -18,6 +18,12 @@ import numpy as np
 class DenoiseKernel(str, Enum):
     """Denoising algorithm selector.
 
+    No extra dependencies:
+      BILATERAL_SPATIAL — Spatial bilateral filter (pure numpy).
+                  Edge-preserving; no GPU required. Slow on large images
+                  (~10-30 s for 4160×3120) but uses no extra dependencies.
+                  Typical sigma: 0.02 (subtle) – 0.15 (heavy).
+
     Requires ``pip install shadow[denoise]``:
       BM3D      — Block Matching 3D; gold-standard classical CPU denoiser.
                   Typical sigma: 0.02 (subtle) – 0.15 (heavy).
@@ -34,6 +40,7 @@ class DenoiseKernel(str, Enum):
     MPS (Apple Silicon), or CPU — whichever is available first.
     """
 
+    BILATERAL_SPATIAL = "bilateral_spatial"
     BM3D      = "bm3d"
     BILATERAL = "bilateral"
     DNCNN     = "dncnn"
@@ -182,6 +189,86 @@ def _tile_denoise(
     return out  # CPU tensor; caller does .cpu().numpy() which is then a no-op
 
 
+def _bilateral_filter(
+    img: np.ndarray,
+    sigma_r: float,
+    sigma_s: float = 3.0,
+    radius: int = 5,
+) -> np.ndarray:
+    """Per-channel bilateral filter on a float32 (H, W, C) image.
+
+    Iterates over a (2*radius+1)^2 window of pixel offsets and accumulates
+    weighted contributions using both spatial (Gaussian sigma_s) and range
+    (Gaussian sigma_r) weights.  This is O(N * (2*radius+1)^2) — 121 passes
+    over the full image for radius=5 — but requires only numpy and no GPU.
+
+    img:     float32 array, shape (H, W, C), values in [0, 1].
+    sigma_r: range sigma — controls how strongly intensity differences suppress
+             the weight.  Matches the outer sigma argument to denoise_image().
+    sigma_s: spatial sigma — controls how far the spatial Gaussian reaches.
+    radius:  half-width of the search window (pixels in each direction).
+    """
+    H, W, C = img.shape
+    result = np.zeros_like(img)
+    weight_sum = np.zeros((H, W, 1), dtype=np.float32)
+
+    inv_2sr2 = -1.0 / (2.0 * sigma_r ** 2)
+    inv_2ss2 = -1.0 / (2.0 * sigma_s ** 2)
+
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            spatial_w = np.exp((dy * dy + dx * dx) * inv_2ss2)
+            # Skip negligible spatial weights to avoid polluting the sum.
+            if spatial_w < 1e-6:
+                continue
+
+            # Shift the image by (dy, dx) with zero-padding at borders so that
+            # rolled-in values from the opposite edge don't influence the result.
+            shifted = np.roll(np.roll(img, dy, axis=0), dx, axis=1)
+            if dy > 0:
+                shifted[:dy, :, :] = 0.0
+            elif dy < 0:
+                shifted[dy:, :, :] = 0.0
+            if dx > 0:
+                shifted[:, :dx, :] = 0.0
+            elif dx < 0:
+                shifted[:, dx:, :] = 0.0
+
+            # Range weight: sum of squared per-channel differences.
+            range_diff = np.sum((img - shifted) ** 2, axis=2, keepdims=True)
+            range_w = np.exp(range_diff * inv_2sr2)
+
+            w = spatial_w * range_w          # shape (H, W, 1) — broadcast over C
+            result += w * shifted
+            weight_sum += w
+
+    # Guard against a near-zero weight sum at heavily-padded border corners.
+    return result / np.maximum(weight_sum, 1e-8)
+
+
+def _denoise_bilateral_spatial(
+    image: np.ndarray,
+    *,
+    sigma: float,
+    on_advance: "Callable[[int], None] | None" = None,
+) -> np.ndarray:
+    """Spatial bilateral filter.  No extra dependencies beyond numpy.
+
+    sigma_s is derived from sigma to give a spatially consistent window
+    relative to the noise level; radius is capped at 8 to keep run-time
+    tractable on full-resolution (4160×3120) images (~10-30 s on CPU).
+    """
+    _adv = on_advance if on_advance is not None else lambda n: None
+    # Scale spatial sigma with range sigma; floor at 1.5 to avoid a trivial
+    # single-pixel window for very small sigma values.
+    sigma_s = max(1.5, sigma * 20.0)
+    # Cap radius at 8 so the (2*r+1)^2 = 289 passes remain tractable.
+    radius = min(int(sigma_s * 2.5), 8)
+    result = _bilateral_filter(image, sigma_r=sigma, sigma_s=sigma_s, radius=radius)
+    _adv(1)
+    return np.clip(result, 0.0, 1.0)
+
+
 def denoise_image(
     rgb: np.ndarray,
     kernel: "DenoiseKernel | DenoiseFn",
@@ -216,6 +303,9 @@ def denoise_image(
         result = kernel(rgb, sigma)
         _adv(1)
         return result
+
+    if kernel == DenoiseKernel.BILATERAL_SPATIAL:
+        return _denoise_bilateral_spatial(rgb, sigma=sigma, on_advance=on_advance)
 
     if kernel == DenoiseKernel.BM3D:
         try:

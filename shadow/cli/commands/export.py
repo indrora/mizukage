@@ -151,11 +151,16 @@ _GAMMA = _GammaParamType()
 )
 @click.option(
     "--denoise", "denoise_kernel",
-    type=click.Choice(["bm3d", "bilateral", "dncnn", "drunet"], case_sensitive=False),
+    type=click.Choice(
+        ["bilateral_spatial", "bm3d", "bilateral", "dncnn", "drunet"],
+        case_sensitive=False,
+    ),
     default=None,
     metavar="ALG",
     help=(
         "Denoising algorithm applied in linear light before colour correction. "
+        "'bilateral_spatial' = pure-numpy spatial bilateral filter (no extra deps; "
+        "slow on large images, ~10-30 s). "
         "'bm3d' = Block Matching 3D, CPU (pip install shadow[denoise]). "
         "'bilateral' = GPU bilateral filter via kornia (pip install shadow[denoise-gpu]). "
         "'dncnn' = blind deep CNN; 'drunet' = sigma-aware residual U-Net "
