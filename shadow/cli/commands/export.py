@@ -55,6 +55,12 @@ console = Console()
     default=False,
     help="Skip white-balance gains (export raw linear colour).",
 )
+@click.option(
+    "--no-gamma",
+    is_flag=True,
+    default=False,
+    help="Skip sRGB gamma encoding (output linear light values, will appear very dark).",
+)
 def export(
     file: str,
     out_dir: str,
@@ -64,6 +70,7 @@ def export(
     half_res: bool,
     no_subtract_black: bool,
     no_awb: bool,
+    no_gamma: bool,
 ) -> None:
     """Export camera module images from an LRI file.
 
@@ -91,6 +98,7 @@ def export(
 
     subtract_black = not no_subtract_black
     apply_awb = not no_awb
+    apply_gamma = not no_gamma
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
@@ -110,10 +118,12 @@ def export(
 
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, raw=raw, half_res=half_res,
-                            subtract_black=subtract_black, apply_awb=apply_awb)
+                            subtract_black=subtract_black, apply_awb=apply_awb,
+                            gamma=apply_gamma)
             else:
                 img.to_png(dest, raw=raw, half_res=half_res,
-                           subtract_black=subtract_black, apply_awb=apply_awb)
+                           subtract_black=subtract_black, apply_awb=apply_awb,
+                           gamma=apply_gamma)
 
             progress.advance(task)
 

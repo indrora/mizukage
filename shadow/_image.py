@@ -21,6 +21,15 @@ from shadow._types import (
 _10BIT_MAX = 1023
 
 
+def _srgb_gamma(linear: np.ndarray) -> np.ndarray:
+    """Apply sRGB gamma to a float32 array normalised to [0..1].
+
+    Values outside [0..1] are clipped first so the power function is safe.
+    """
+    v = np.clip(linear, 0.0, 1.0).astype(np.float32)
+    return np.where(v <= 0.0031308, 12.92 * v, 1.055 * np.power(v, 1.0 / 2.4) - 0.055)
+
+
 @dataclass
 class RawImage:
     """Raw sensor data for a single L16 camera module.
@@ -174,13 +183,16 @@ class RawImage:
         half_res: bool = False,
         subtract_black: bool = True,
         apply_awb: bool = True,
+        gamma: bool = True,
     ) -> None:
         """Save as PNG.
 
         raw=True  → 16-bit grayscale Bayer PNG (no demosaic; full bit depth)
-        raw=False → 8-bit RGB PNG (demosaiced, AWB-corrected by default)
+        raw=False → 8-bit RGB PNG (demosaiced, AWB-corrected, gamma-encoded by default)
         half_res  → half-resolution demosaic (ignored when raw=True)
         apply_awb → apply white-balance gains (ignored when raw=True)
+        gamma     → apply sRGB gamma curve (ignored when raw=True); without it the
+                    image will appear very dark because sensor data is linear light
 
         Note: Pillow does not support 16-bit RGB PNG natively. Use to_tiff()
         for 16-bit per-channel debayered output.
@@ -198,10 +210,11 @@ class RawImage:
             rgb = self.to_debayered_numpy(
                 half_res=half_res, subtract_black=subtract_black, apply_awb=apply_awb
             )
-            # Scale to 8-bit. With AWB applied the effective white for R/B may be
-            # above white_level, so we clip rather than scale per-channel — saturated
-            # highlights clip correctly, matching standard camera JPEG behaviour.
-            rgb8 = (rgb * (255.0 / white)).clip(0, 255).astype(np.uint8)
+            # Normalise to [0..1]; AWB can push R/B above white_level so clip.
+            normalized = (rgb / white).clip(0.0, 1.0).astype(np.float32)
+            if gamma:
+                normalized = _srgb_gamma(normalized)
+            rgb8 = (normalized * 255.0).clip(0, 255).astype(np.uint8)
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
     def to_tiff(
@@ -212,12 +225,14 @@ class RawImage:
         half_res: bool = False,
         subtract_black: bool = True,
         apply_awb: bool = True,
+        gamma: bool = True,
     ) -> None:
         """Save as TIFF.
 
         raw=True  → 16-bit grayscale Bayer TIFF (full bit depth, scaled to uint16)
-        raw=False → 8-bit RGB TIFF (debayered, AWB-corrected by default)
+        raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, gamma-encoded by default)
         apply_awb → apply white-balance gains (ignored when raw=True)
+        gamma     → apply sRGB gamma curve (ignored when raw=True)
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
@@ -233,7 +248,10 @@ class RawImage:
             rgb = self.to_debayered_numpy(
                 half_res=half_res, subtract_black=subtract_black, apply_awb=apply_awb
             )
-            rgb8 = (rgb * (255.0 / white)).clip(0, 255).astype(np.uint8)
+            normalized = (rgb / white).clip(0.0, 1.0).astype(np.float32)
+            if gamma:
+                normalized = _srgb_gamma(normalized)
+            rgb8 = (normalized * 255.0).clip(0, 255).astype(np.uint8)
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
 
