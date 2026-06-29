@@ -27,6 +27,11 @@ def run_viewer(calib_dir: Path) -> None:
 
     # ── DearPyGui setup ───────────────────────────────────────────────────────
     dpg.create_context()
+
+    # Texture registry must live at the app level (before any window) so that
+    # dpg.set_value updates are applied correctly when tabs are switched.
+    _hotpixels.register_texture(data, init_cam)
+
     dpg.create_viewport(
         title=f"shadow calib-view — {calib_dir}",
         width=_WIN_W,
@@ -34,9 +39,6 @@ def run_viewer(calib_dir: Path) -> None:
         min_width=800,
         min_height=500,
     )
-
-    # Texture registry must be created before any texture tags are referenced.
-    # _hotpixels.build() creates its own registry internally.
 
     with dpg.window(tag="main_window"):
         with dpg.group(horizontal=True):

@@ -24,40 +24,79 @@ def _blank_rgba() -> list[float]:
 
 
 def _bitmap_to_rgba(bitmap: np.ndarray) -> list[float]:
-    """Downsample bitmap to display size and encode as flat RGBA floats."""
-    from PIL import Image
-    H, W = bitmap.shape
-    img = Image.fromarray((bitmap * 255).astype(np.uint8), mode="L")
-    img = img.resize((_DISP_W, _DISP_H), Image.NEAREST)
-    arr = np.array(img, dtype=np.uint8)
+    """Downsample bitmap to display size and encode as flat RGBA floats.
 
-    hot = arr > 0
+    The L16 hot-pixel map stores per-pixel severity scores (0=clean, 1–7=defect
+    level).  With ~12 % of pixels non-zero, NEAREST downsampling produces a
+    confusing speckled pattern.  Instead we use bilinear averaging so each
+    display pixel shows the *density* of defects in that region, then colour-map
+    that density from dark-grey (0 %) through orange to bright red (≥ 20 %).
+    """
+    from PIL import Image
+
+    H, W = bitmap.shape
+    # Normalise to 0–255 based on max possible value (7) so severity is visible.
+    scaled = np.clip(bitmap.astype(np.float32) / 7.0 * 255, 0, 255).astype(np.uint8)
+    img = Image.fromarray(scaled, mode="L")
+    img = img.resize((_DISP_W, _DISP_H), Image.BILINEAR)
+    density = np.array(img, dtype=np.float32) / 255.0  # 0.0–1.0 per display pixel
+
+    # Dark-grey → orange → red colour ramp
     rgba = np.empty((_DISP_H, _DISP_W, 4), dtype=np.float32)
-    rgba[hot]  = [1.0, 0.1, 0.1, 1.0]   # red for hot pixels
-    rgba[~hot] = [0.08, 0.08, 0.08, 1.0] # dark grey for normal
+    rgba[:, :, 0] = np.clip(0.08 + 0.92 * density * 4, 0, 1)   # R ramps up fast
+    rgba[:, :, 1] = np.clip(0.08 + 0.30 * density * 2 - density * 0.5, 0, 1)  # G slight orange then drops
+    rgba[:, :, 2] = np.clip(0.08 * (1 - density * 4), 0, 1)     # B fades out
+    rgba[:, :, 3] = 1.0
     return rgba.flatten().tolist()
 
 
-def build(data: "CalibData", init_camera: str | None) -> None:
-    """Build the hot-pixels tab. Creates the texture registry and image widget."""
+def register_texture(data: "CalibData", init_camera: str | None) -> None:
+    """Create the hot-pixel texture in the app-level texture registry.
+
+    Must be called BEFORE any window is created so DearPyGui registers the
+    texture at the top level (not as a child of a tab or window).
+    """
     import dearpygui.dearpygui as dpg
+
+    bitmap = data.hot_pixels.get(init_camera) if init_camera else None
+    initial = _bitmap_to_rgba(bitmap) if bitmap is not None else _blank_rgba()
 
     with dpg.texture_registry(show=False):
         dpg.add_raw_texture(
             width=_DISP_W,
             height=_DISP_H,
-            default_value=_blank_rgba(),
+            default_value=initial,
             format=dpg.mvFormat_Float_rgba,
             tag=_TAG_TEX,
         )
 
-    dpg.add_text("Camera hot-pixel bitmap (red = hot, dark grey = normal). Downsampled for display.")
-    dpg.add_image(_TAG_TEX, tag=_TAG_IMG)
-    dpg.add_text("—", tag=_TAG_STATS)
-    dpg.add_text("", tag=_TAG_MEAS)
 
-    if init_camera:
-        update(data, init_camera)
+def build(data: "CalibData", init_camera: str | None) -> None:
+    """Build the hot-pixels tab widgets (texture must already be registered)."""
+    import dearpygui.dearpygui as dpg
+
+    dpg.add_text(
+        "Camera hot-pixel bitmap (red = hot, dark grey = normal). Downsampled for display.",
+        wrap=0,
+    )
+    dpg.add_image(_TAG_TEX, tag=_TAG_IMG)
+
+    bitmap = data.hot_pixels.get(init_camera) if init_camera else None
+    if bitmap is not None:
+        n_defect = int((bitmap > 0).sum())
+        total    = bitmap.size
+        pct      = n_defect / total * 100
+        dpg.add_text(
+            f"{n_defect:,} defective pixels  ({pct:.3f}%)  —  sensor {bitmap.shape[1]}×{bitmap.shape[0]}"
+            f"  severity 1–{int(bitmap.max())}",
+            tag=_TAG_STATS,
+        )
+    else:
+        dpg.add_text("No hot-pixel data for this camera.", tag=_TAG_STATS)
+
+    stats = data.hp_stats.get(init_camera, []) if init_camera else []
+    meas_text = _meas_lines(stats)
+    dpg.add_text(meas_text, tag=_TAG_MEAS)
 
 
 def update(data: "CalibData", camera: str) -> None:
@@ -75,19 +114,26 @@ def update(data: "CalibData", camera: str) -> None:
 
     dpg.set_value(_TAG_TEX, _bitmap_to_rgba(bitmap))
 
-    n_hot  = int(bitmap.sum())
-    total  = bitmap.size
-    pct    = n_hot / total * 100 if total else 0.0
-    dpg.set_value(_TAG_STATS, f"{n_hot:,} hot pixels  ({pct:.3f}%)  —  sensor {bitmap.shape[1]}×{bitmap.shape[0]}")
+    n_defect = int((bitmap > 0).sum())
+    total    = bitmap.size
+    pct      = n_defect / total * 100
+    dpg.set_value(
+        _TAG_STATS,
+        f"{n_defect:,} defective pixels  ({pct:.3f}%)  —  sensor {bitmap.shape[1]}×{bitmap.shape[0]}"
+        f"  severity 1–{int(bitmap.max())}",
+    )
+    dpg.set_value(_TAG_MEAS, _meas_lines(stats))
 
-    if stats:
-        lines = []
-        for i, m in enumerate(stats):
+
+def _meas_lines(stats: list[dict]) -> str:
+    if not stats:
+        return ""
+    lines = []
+    for i, m in enumerate(stats):
+        if "sensor_gain" in m:
             lines.append(
                 f"Measurement {i+1}: gain={m['sensor_gain']:.2f}  "
                 f"temp={m['sensor_temperature_c']:.1f}°C  "
                 f"exp={m['sensor_exposure_us']} µs"
             )
-        dpg.set_value(_TAG_MEAS, "\n".join(lines))
-    else:
-        dpg.set_value(_TAG_MEAS, "")
+    return "\n".join(lines)
