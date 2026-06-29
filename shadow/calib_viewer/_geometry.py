@@ -3,10 +3,125 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 if TYPE_CHECKING:
     from shadow.calib_viewer._data import CalibData
 
 _TAG_GROUP = "geo_group"
+
+# Grid density for distortion visualisation
+_VIZ_NX = 17
+_VIZ_NY = 13
+
+# L16 sensor dimensions (physical pixel array)
+_SENSOR_W = 4160
+_SENSOR_H = 3120
+
+# Canvas scale: 1:8 reduction → 520×390 px canvas
+_VIZ_SCALE = 1 / 8
+_VIZ_CW    = int(_SENSOR_W * _VIZ_SCALE)   # 520
+_VIZ_CH    = int(_SENSOR_H * _VIZ_SCALE)   # 390
+
+
+def _distortion_viz(dist_d: dict) -> None:
+    """Draw ideal vs. radially-distorted grid to visualise the lens distortion model."""
+    import dearpygui.dearpygui as dpg
+
+    poly = dist_d.get("polynomial", {})
+    if not poly:
+        return
+    center = poly.get("distortion_center", {})
+    norm_p = poly.get("normalization", {})
+    k_list = [float(c) for c in poly.get("coeffs", [])]
+    if not k_list:
+        return
+
+    cx     = float(center.get("x", _SENSOR_W / 2))
+    cy     = float(center.get("y", _SENSOR_H / 2))
+    norm_x = float(norm_p.get("x", float(_SENSOR_W)))
+    norm_y = float(norm_p.get("y", norm_x))
+
+    # ── Apply forward distortion model to a regular grid ─────────────────────
+    # xn = (x - cx) / norm_x;  factor = 1 + k1·r² + k2·r⁴ + …
+    xs = np.linspace(0.0, _SENSOR_W, _VIZ_NX)
+    ys = np.linspace(0.0, _SENSOR_H, _VIZ_NY)
+    gx, gy = np.meshgrid(xs, ys)           # (NY, NX)
+
+    xn = (gx - cx) / norm_x
+    yn = (gy - cy) / norm_y
+    r2 = xn ** 2 + yn ** 2
+
+    factor = np.ones_like(r2)
+    r2k = r2.copy()
+    for k in k_list:
+        factor += k * r2k
+        r2k *= r2
+
+    dx = xn * factor * norm_x + cx         # distorted x in sensor px
+    dy = yn * factor * norm_y + cy         # distorted y in sensor px
+
+    # Max corner displacement (for the info label)
+    ideal_corners = np.array([
+        [gx[0, 0], gy[0, 0]], [gx[0, -1], gy[0, -1]],
+        [gx[-1, 0], gy[-1, 0]], [gx[-1, -1], gy[-1, -1]],
+    ])
+    dist_corners = np.array([
+        [dx[0, 0], dy[0, 0]], [dx[0, -1], dy[0, -1]],
+        [dx[-1, 0], dy[-1, 0]], [dx[-1, -1], dy[-1, -1]],
+    ])
+    max_disp = float(np.max(np.linalg.norm(dist_corners - ideal_corners, axis=1)))
+    k1_sign  = "barrel" if k_list[0] < 0 else "pincushion" if k_list[0] > 0 else "none"
+
+    # ── Draw ─────────────────────────────────────────────────────────────────
+    # Scale to canvas coordinates
+    s = _VIZ_SCALE
+    igx = (gx * s).tolist()   # ideal, canvas scale
+    igy = (gy * s).tolist()
+    wgx = (dx * s).tolist()   # warped
+    wgy = (dy * s).tolist()
+
+    IDEAL_COL  = [55, 60, 80, 200]
+    WARP_COL   = [220, 200, 80, 255]
+    CENTER_COL = [220, 80, 80, 255]
+
+    dpg.add_text(
+        f"Distortion grid  ({k1_sign}, k1={k_list[0]:+.4f})"
+        f"  max corner shift: {max_disp:.1f} px",
+        color=[160, 160, 160],
+    )
+    dpg.add_text("  grey = ideal  amber = distorted", color=[120, 120, 120])
+
+    with dpg.drawlist(width=_VIZ_CW, height=_VIZ_CH):
+        dpg.draw_rectangle([0, 0], [_VIZ_CW - 1, _VIZ_CH - 1],
+                           fill=[15, 16, 22, 255], color=[40, 40, 50, 255])
+
+        # Ideal grid — horizontal then vertical segments
+        for j in range(_VIZ_NY):
+            for i in range(_VIZ_NX - 1):
+                dpg.draw_line([igx[j][i], igy[j][i]], [igx[j][i+1], igy[j][i+1]],
+                              color=IDEAL_COL, thickness=1)
+        for j in range(_VIZ_NY - 1):
+            for i in range(_VIZ_NX):
+                dpg.draw_line([igx[j][i], igy[j][i]], [igx[j+1][i], igy[j+1][i]],
+                              color=IDEAL_COL, thickness=1)
+
+        # Distorted grid
+        for j in range(_VIZ_NY):
+            for i in range(_VIZ_NX - 1):
+                dpg.draw_line([wgx[j][i], wgy[j][i]], [wgx[j][i+1], wgy[j][i+1]],
+                              color=WARP_COL, thickness=1)
+        for j in range(_VIZ_NY - 1):
+            for i in range(_VIZ_NX):
+                dpg.draw_line([wgx[j][i], wgy[j][i]], [wgx[j+1][i], wgy[j+1][i]],
+                              color=WARP_COL, thickness=1)
+
+        # Distortion centre crosshair
+        ccx, ccy = cx * s, cy * s
+        r = 5
+        dpg.draw_circle([ccx, ccy], r, color=CENTER_COL, thickness=1)
+        dpg.draw_line([ccx - r * 2, ccy], [ccx + r * 2, ccy], color=CENTER_COL, thickness=1)
+        dpg.draw_line([ccx, ccy - r * 2], [ccx, ccy + r * 2], color=CENTER_COL, thickness=1)
 
 
 def build(data: "CalibData", init_camera: str | None) -> None:
@@ -108,22 +223,45 @@ def update(data: "CalibData", camera: str) -> None:
                     dpg.add_text(f"{rp:.4f}" if isinstance(rp, float) else "—")
                     dpg.add_text(f"{temp:.0f}" if isinstance(temp, (int, float)) else "—")
 
-        # Distortion coefficients
+        # Distortion coefficients + grid visualisation
         dist_d = geo.get("distortion", {})
         if dist_d:
             dpg.add_separator()
-            dpg.add_text("Distortion coefficients", color=[200, 200, 100])
-            coeffs = {k: v for k, v in dist_d.items() if isinstance(v, (int, float))}
-            if coeffs:
-                with dpg.table(header_row=True, resizable=True, width=-1):
-                    for k in coeffs:
-                        dpg.add_table_column(label=k)
-                    with dpg.table_row():
-                        for v in coeffs.values():
-                            dpg.add_text(f"{v:.6f}")
+            dpg.add_text("Distortion model", color=[200, 200, 100])
+            poly = dist_d.get("polynomial", {})
+            if poly:
+                center = poly.get("distortion_center", {})
+                norm_p = poly.get("normalization", {})
+                k_list = [float(c) for c in poly.get("coeffs", [])]
+                cx_d   = float(center.get("x", 0.0))
+                cy_d   = float(center.get("y", 0.0))
+                nx_d   = float(norm_p.get("x", 0.0))
+                dpg.add_text(
+                    f"Centre: ({cx_d:.1f}, {cy_d:.1f} px)   Norm: {nx_d:.0f} px"
+                )
+                if k_list:
+                    with dpg.table(header_row=True, resizable=False):
+                        for i in range(len(k_list)):
+                            dpg.add_table_column(
+                                label=f"k{i+1}", width_fixed=True, init_width_or_weight=100
+                            )
+                        with dpg.table_row():
+                            for v in k_list:
+                                dpg.add_text(f"{v:+.6f}")
             else:
-                # Distortion might be a nested message
-                dpg.add_text(str(dist_d))
+                # Flat scalar fields (legacy format)
+                flat = {k: v for k, v in dist_d.items() if isinstance(v, (int, float))}
+                if flat:
+                    with dpg.table(header_row=True, resizable=True, width=-1):
+                        for k in flat:
+                            dpg.add_table_column(label=k)
+                        with dpg.table_row():
+                            for v in flat.values():
+                                dpg.add_text(f"{v:.6f}")
+                else:
+                    dpg.add_text(str(dist_d))
+            dpg.add_spacer(height=6)
+            _distortion_viz(dist_d)
 
         # ── Extrinsics ────────────────────────────────────────────────────────
         ext = data.extrinsics.get(camera)
