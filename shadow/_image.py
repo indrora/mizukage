@@ -16,6 +16,7 @@ from shadow._types import (
     CameraId,
     ColorProfile,
     Illuminant,
+    Orientation,
     RawFormat,
     SensorModel,
 )
@@ -99,6 +100,9 @@ class RawImage:
     _data_offset: int = field(repr=False, compare=False, kw_only=True)
     _row_stride: int = field(repr=False, compare=False, kw_only=True, default=0)
     _black_level: float = field(repr=False, compare=False, kw_only=True, default=64.0)
+    # IMU-derived or ViewPreferences-derived device-hold orientation.
+    # Back-filled by LriFile after all LELR blocks are parsed.
+    _imu_orientation: Orientation | None = field(repr=False, compare=False, kw_only=True, default=None)
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -222,17 +226,26 @@ class RawImage:
     # ── File export ───────────────────────────────────────────────────────────
 
     def _orient(self, arr: np.ndarray) -> np.ndarray:
-        """Apply 180° rotation to correct for sensor physical mounting.
+        """Compose the 180° sensor-mount correction with the IMU device-hold rotation.
 
-        All L16 sensors are physically mounted upside-down relative to the
-        natural viewing direction.  The proto sensor_is_horizontal_flip /
-        sensor_is_vertical_flip fields are never set in practice (always
-        default False); the reference implementation (prism) applies a
-        rotate_180 unconditionally on every image.
+        All L16 sensors are physically mounted 180° upside-down.  On top of
+        that, the user may hold the device in portrait or inverted landscape.
+        Composing both into one numpy operation avoids an extra array copy.
 
-        np.ascontiguousarray ensures PIL can consume the result without
-        stride surprises after the double-axis reversal.
+        Derivation (array rotations, CCW positive):
+          sensor 180°  +  NORMAL (landscape)       = 180°   → arr[::-1, ::-1]
+          sensor 180°  +  ROT90_CCW (top-left)     = 90° CW → np.rot90(arr, k=-1)
+          sensor 180°  +  ROT90_CW  (top-right)    = 90°CCW → np.rot90(arr, k=1)
+          sensor 180°  +  ROT180 (upside-down)      = 0°     → arr (identity)
         """
+        hold = self._imu_orientation
+        if hold == Orientation.ROT90_CCW:
+            return np.ascontiguousarray(np.rot90(arr, k=-1))
+        if hold == Orientation.ROT90_CW:
+            return np.ascontiguousarray(np.rot90(arr, k=1))
+        if hold == Orientation.ROT180:
+            return np.ascontiguousarray(arr)
+        # NORMAL, None, or unhandled: 180° sensor-mount fix only
         return np.ascontiguousarray(arr[::-1, ::-1])
 
     def _export_rgb8(

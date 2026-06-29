@@ -217,6 +217,49 @@ def update_metadata_from_light_header(meta: CaptureMetadata, lh) -> None:
     if meta.gps is None and lh.HasField("gps_data"):
         meta.gps = gps_from_proto(lh.gps_data)
 
+    # IMU-derived orientation (field 23); ViewPreferences takes priority if set
+    if meta.orientation is None:
+        meta.orientation = imu_orientation_from_light_header(lh)
+
+
+def imu_orientation_from_light_header(lh) -> Orientation | None:
+    """Infer device-hold orientation from IMU accelerometer samples.
+
+    The L16 accelerometer convention (empirically derived):
+        +Y dominant → landscape, natural (Y axis points down in landscape hold)
+        −Y dominant → landscape, upside-down
+        −X dominant → portrait, top-left  (device rotated CCW from landscape)
+        +X dominant → portrait, top-right (device rotated CW  from landscape)
+        Z  dominant → camera lying flat; orientation undefined → None
+
+    Returns the display correction to apply *after* the 180° sensor-mount fix.
+    """
+    imu_list = list(lh.imu_data)
+    if not imu_list:
+        return None
+
+    ax_sum = ay_sum = az_sum = 0.0
+    count = 0
+    for imu in imu_list:
+        for sample in imu.accelerometer:
+            ax_sum += sample.data.x
+            ay_sum += sample.data.y
+            az_sum += sample.data.z
+            count += 1
+    if count == 0:
+        return None
+
+    ax = ax_sum / count
+    ay = ay_sum / count
+    az = az_sum / count
+
+    abs_ax, abs_ay, abs_az = abs(ax), abs(ay), abs(az)
+    if abs_az >= abs_ax and abs_az >= abs_ay:
+        return None  # flat on a surface
+    if abs_ay >= abs_ax:
+        return Orientation.NORMAL if ay > 0 else Orientation.ROT180
+    return Orientation.ROT90_CCW if ax < 0 else Orientation.ROT90_CW
+
 
 def update_metadata_from_view_prefs(meta: CaptureMetadata, vp) -> None:
     """Merge ViewPreferences proto fields into CaptureMetadata (in-place)."""
@@ -243,6 +286,12 @@ def update_metadata_from_view_prefs(meta: CaptureMetadata, vp) -> None:
 
     if meta.on_tripod is None and vp.HasField("is_on_tripod"):
         meta.on_tripod = bool(vp.is_on_tripod)
+
+    if meta.orientation is None and vp.HasField("orientation"):
+        try:
+            meta.orientation = Orientation(vp.orientation)
+        except ValueError:
+            pass
 
 
 def update_metadata_from_gps_block(meta: CaptureMetadata, gps_proto) -> None:

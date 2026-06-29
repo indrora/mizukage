@@ -138,6 +138,7 @@ class LriFile:
             if img.camera_id in color_profiles_by_cam:
                 img.color_profiles = color_profiles_by_cam[img.camera_id]
             img.awb_gains = metadata.awb_gains  # same gains apply to all modules
+            img._imu_orientation = metadata.orientation  # same hold for all cameras
 
         return cls(images, metadata, color_profiles_by_cam)
 

@@ -195,3 +195,6 @@ class CaptureMetadata:
     on_tripod: bool | None
     gps: GpsData | None
     modules: dict[CameraId, ModuleCapture] = field(default_factory=dict)
+    # Device-hold orientation inferred from IMU accelerometer (or ViewPreferences).
+    # None means no IMU data was available.
+    orientation: Orientation | None = None

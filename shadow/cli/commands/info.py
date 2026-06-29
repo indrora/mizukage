@@ -68,6 +68,18 @@ def _info_lri(path: Path, show_blocks: bool, show_cameras: bool, as_json: bool) 
             "AWB gains",
             f"R={g.r:.4f}  Gr={g.gr:.4f}  Gb={g.gb:.4f}  B={g.b:.4f}",
         )
+    if meta.orientation is not None:
+        _ORIENT_LABELS = {
+            0: "landscape",
+            1: "portrait (top-right)",
+            2: "portrait (top-left)",
+            7: "landscape (inverted)",
+        }
+        from shadow._types import Orientation
+        summary.add_row(
+            "Orientation",
+            _ORIENT_LABELS.get(meta.orientation.value, meta.orientation.name),
+        )
     if meta.on_tripod is not None:
         summary.add_row("On tripod", "yes" if meta.on_tripod else "no")
     if meta.gps:
