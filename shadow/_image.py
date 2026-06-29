@@ -242,6 +242,11 @@ class RawImage:
         )
         normalized = (rgb / white).astype(np.float32)
         if apply_ccm:
+            # Clip to [0, 1] before the CCM. AWB gains > 1.0 can push saturated
+            # channels above white_level; the forward_matrix's negative cross-terms
+            # then collapse G (e.g. FM([1.92, 1.0, 1.76]) → sRGB G≈0.26 = pink).
+            # Clipping first ensures saturated highlights render as white, not magenta.
+            np.clip(normalized, 0.0, 1.0, out=normalized)
             # Prefer the D65 profile; fall back to any available illuminant.
             prof = self.color_profile(Illuminant.D65)
             if prof is None and self.color_profiles:
