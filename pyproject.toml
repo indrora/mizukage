@@ -21,6 +21,9 @@ demosaic = ["colour-demosaicing>=0.2.7"]
 denoise = [
     "bm3d>=4.0",
 ]
+# GPU-accelerated bilateral denoising via kornia + PyTorch.
+# Works on NVIDIA CUDA, AMD ROCm, DirectML (Windows), Apple MPS, and CPU.
+denoise-gpu = ["kornia>=0.7", "torch>=2.0"]
 
 [project.scripts]
 shadow = "shadow.cli.main:cli"

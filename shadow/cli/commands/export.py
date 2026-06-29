@@ -141,12 +141,14 @@ _GAMMA = _GammaParamType()
 )
 @click.option(
     "--denoise", "denoise_kernel",
-    type=click.Choice(["bm3d"], case_sensitive=False),
+    type=click.Choice(["bm3d", "bilateral"], case_sensitive=False),
     default=None,
     metavar="ALG",
     help=(
         "Denoising algorithm applied in linear light before colour correction. "
-        "'bm3d' = Block Matching 3D (requires pip install shadow[denoise]). "
+        "'bm3d' = Block Matching 3D, CPU (pip install shadow[denoise]). "
+        "'bilateral' = GPU-accelerated bilateral filter via kornia, "
+        "works on CUDA/ROCm/DirectML/MPS (pip install shadow[denoise-gpu]). "
         "Ignored with --raw."
     ),
 )
