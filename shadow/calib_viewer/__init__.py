@@ -18,7 +18,7 @@ def run_viewer(calib_dir: Path) -> None:
     import dearpygui.dearpygui as dpg
 
     from shadow.calib_viewer._data import load_calib_data
-    from shadow.calib_viewer import _hotpixels, _noise, _vignetting, _geometry, _color
+    from shadow.calib_viewer import _hotpixels, _noise, _vignetting, _geometry, _color, _layout
 
     # ── Load calibration data (once, at startup) ─────────────────────────────
     data = load_calib_data(calib_dir)
@@ -88,6 +88,9 @@ def run_viewer(calib_dir: Path) -> None:
 
                     with dpg.tab(label="Color", tag="tab_color"):
                         _color.build(data, init_cam)
+
+                    with dpg.tab(label="Layout", tag="tab_layout"):
+                        _layout.build(data)
 
     # Store panel update references in user_data of the radio button
     dpg.set_item_user_data(
