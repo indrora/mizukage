@@ -3,6 +3,7 @@
 Provides:
   * load_hot_pixel_map / apply_hot_pixel_correction — hotpixel.rec support
   * VSTEntry / load_vst_model / compute_scalar_sigma — VST noise model from calibration.lri
+  * DistortionParams / load_distortion_params / undistort_image — radial lens undistortion
 
 The VST (Variance-Stabilising Transform) noise model records, for each gain
 setting, a per-channel linear model:
@@ -380,3 +381,162 @@ def compute_scalar_sigma(
         return 0.05
     sigma_raw = variance ** 0.5 / white_level  # normalise to [0, 1]
     return max(0.01, min(0.30, sigma_raw))
+
+
+# ── Lens distortion correction ─────────────────────────────────────────────────
+
+@dataclass
+class DistortionParams:
+    """Radial polynomial distortion parameters for one camera.
+
+    Calibrated by the factory and stored in calibration.lri under
+    mc.geometry.distortion.polynomial for each module calibration block.
+
+    The forward distortion model (normalised space):
+        r²  = xn² + yn²,  where xn = (x − cx) / norm_x
+        factor = 1 + k1·r² + k2·r⁴ + k3·r⁶ + k4·r⁸ + k5·r¹⁰
+        x_distorted = xn·factor·norm_x + cx
+
+    Undistortion uses this same forward map applied to the *destination* grid
+    (inverse mapping), so no iterative solver is required.
+    """
+    cx: float          # distortion centre x (pixels)
+    cy: float          # distortion centre y (pixels)
+    norm_x: float      # normalisation scale x (pixels)
+    norm_y: float      # normalisation scale y (pixels)
+    coeffs: tuple[float, ...]  # (k1, k2, k3, k4, k5) radial polynomial coefficients
+    valid_roi: tuple[int, int, int, int] | None  # (x, y, w, h) bounding box, or None
+
+
+def load_distortion_params(calib_dir: Path, camera_id: CameraId) -> DistortionParams | None:
+    """Load radial distortion parameters for one camera from calibration.lri.
+
+    Parses ``<calib_dir>/calibration.lri`` as an LELR block stream, finds the
+    FactoryModuleCalibration entry for the requested camera, and returns its
+    polynomial distortion model.
+
+    Accesses proto message fields directly (not via MessageToDict) to preserve
+    full float precision in the polynomial coefficients.
+
+    Returns None when the file is absent, unreadable, or contains no distortion
+    data for this camera — callers should skip undistortion in that case.
+    """
+    calib_path = calib_dir / "calibration.lri"
+    if not calib_path.exists():
+        return None
+
+    from shadow._block import iter_blocks, BlockType
+    import shadow._proto as _proto
+
+    try:
+        data = calib_path.read_bytes()
+    except OSError:
+        return None
+
+    for block_start, hdr in iter_blocks(data):
+        if hdr.msg_type != BlockType.LIGHT_HEADER:
+            continue
+        proto_bytes = data[
+            block_start + hdr.msg_offset :
+            block_start + hdr.msg_offset + hdr.msg_len
+        ]
+        if not proto_bytes:
+            continue
+        try:
+            lh = _proto.parse_light_header(proto_bytes)
+        except Exception:
+            continue
+
+        for mc in lh.module_calibration:
+            if int(mc.camera_id) != int(camera_id):
+                continue
+            # Guard: geometry, distortion, and polynomial sub-messages are optional.
+            if not mc.HasField("geometry"):
+                continue
+            if not mc.geometry.HasField("distortion"):
+                continue
+            if not mc.geometry.distortion.HasField("polynomial"):
+                continue
+
+            poly = mc.geometry.distortion.polynomial
+
+            # Extract valid_roi bounding box if present.
+            valid_roi: tuple[int, int, int, int] | None = None
+            if poly.HasField("valid_roi"):
+                roi = poly.valid_roi
+                valid_roi = (int(roi.x), int(roi.y), int(roi.width), int(roi.height))
+
+            return DistortionParams(
+                cx=float(poly.distortion_center.x),
+                cy=float(poly.distortion_center.y),
+                norm_x=float(poly.normalization.x),
+                norm_y=float(poly.normalization.y),
+                coeffs=tuple(float(k) for k in poly.coeffs),
+                valid_roi=valid_roi,
+            )
+
+    return None
+
+
+def undistort_image(
+    image: np.ndarray,
+    params: DistortionParams,
+) -> np.ndarray:
+    """Undistort a float32 or uint8 image using the factory radial polynomial.
+
+    Uses inverse mapping: for each output pixel, compute where it originated in
+    the distorted (input) image using the forward polynomial, then
+    bilinear-interpolate the source at that fractional coordinate.
+
+    This avoids iterative inversion — the forward map is applied to the
+    *destination* grid, which gives exact inverse-map coordinates directly.
+
+    image: (H, W) or (H, W, C), any dtype
+    Returns: same shape and dtype as input; out-of-bounds border pixels are 0.
+    """
+    from scipy.ndimage import map_coordinates
+
+    H, W = image.shape[:2]
+    in_dtype = image.dtype
+
+    # Build a dense output-pixel grid (rows = y axis, cols = x axis).
+    rows, cols = np.mgrid[0:H, 0:W]  # both (H, W) int arrays
+
+    # Normalise to the distortion model's coordinate space.
+    xn = (cols.astype(np.float64) - params.cx) / params.norm_x
+    yn = (rows.astype(np.float64) - params.cy) / params.norm_y
+    r2 = xn ** 2 + yn ** 2
+
+    # Evaluate the radial distortion polynomial:
+    #   factor = 1 + k1·r² + k2·r⁴ + k3·r⁶ + ...
+    factor = np.ones_like(r2)
+    r2k = r2.copy()
+    for k in params.coeffs:
+        factor += k * r2k
+        r2k *= r2
+
+    # Source pixel coordinates (where to sample from the distorted input).
+    # map_coordinates uses (row, col) order, so (src_y, src_x).
+    src_x = xn * factor * params.norm_x + params.cx   # float64 (H, W)
+    src_y = yn * factor * params.norm_y + params.cy   # float64 (H, W)
+    coords = np.array([src_y, src_x])                 # shape (2, H, W)
+
+    # Bilinear interpolation (order=1); pixels outside the source image → 0.
+    if image.ndim == 2:
+        # Grayscale / single-channel image
+        result = map_coordinates(
+            image.astype(np.float64), coords,
+            order=1, mode="constant", cval=0.0,
+        )
+        return result.astype(in_dtype)
+    else:
+        # Multi-channel image (H, W, C): process each channel independently.
+        channels = image.shape[2]
+        img_f64 = image.astype(np.float64)
+        out_f64 = np.empty((H, W, channels), dtype=np.float64)
+        for c in range(channels):
+            out_f64[..., c] = map_coordinates(
+                img_f64[..., c], coords,
+                order=1, mode="constant", cval=0.0,
+            )
+        return out_f64.astype(in_dtype)

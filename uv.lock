@@ -1355,6 +1355,7 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
     { name = "rich" },
+    { name = "scipy" },
 ]
 
 [package.optional-dependencies]
@@ -1389,6 +1390,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=10.0" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "rich", specifier = ">=13.0" },
+    { name = "scipy", specifier = ">=1.11" },
     { name = "torch", marker = "extra == 'denoise-gpu'", specifier = ">=2.0" },
 ]
 provides-extras = ["dev", "demosaic", "denoise", "denoise-gpu", "explorer"]

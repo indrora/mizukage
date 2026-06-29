@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from PIL import Image as PILImage
@@ -20,6 +21,9 @@ from shadow._types import (
     RawFormat,
     SensorModel,
 )
+
+if TYPE_CHECKING:
+    from shadow._calib import DistortionParams
 
 # 10-bit data after black-level subtract: usable range [0 .. 1023-black_level]
 _10BIT_MAX = 1023
@@ -326,8 +330,10 @@ class RawImage:
         on_advance: Callable[[int], None] | None = None,
         hot_pixel_map: np.ndarray | None = None,
         vignetting_grid: np.ndarray | None = None,
+        undistort: bool = False,
+        distortion_params: DistortionParams | None = None,
     ) -> np.ndarray:
-        """Shared debayer → normalise → denoise → CCM → exposure → gamma → orient → uint8."""
+        """Shared debayer → normalise → denoise → CCM → exposure → undistort → gamma → orient → uint8."""
         _step = on_step if on_step is not None else lambda _: None
         _adv = on_advance if on_advance is not None else lambda n: None
 
@@ -379,6 +385,10 @@ class RawImage:
                 normalized = _apply_forward_matrix(normalized, prof.forward_matrix)
         if exposure != 0.0:
             normalized *= 2.0 ** exposure
+        if undistort and distortion_params is not None:
+            _step("undistorting")
+            from shadow._calib import undistort_image
+            normalized = undistort_image(normalized, distortion_params)
         normalized = _apply_gamma(normalized, gamma)
         result = (normalized * 255.0).clip(0, 255).astype(np.uint8)
         if apply_orientation:
@@ -407,6 +417,8 @@ class RawImage:
         on_advance: Callable[[int], None] | None = None,
         hot_pixel_map: np.ndarray | None = None,
         vignetting_grid: np.ndarray | None = None,
+        undistort: bool = False,
+        distortion_params: DistortionParams | None = None,
     ) -> None:
         """Save as PNG.
 
@@ -461,6 +473,7 @@ class RawImage:
                 on_step=on_step, on_advance=on_advance,
                 hot_pixel_map=hot_pixel_map,
                 vignetting_grid=vignetting_grid,
+                undistort=undistort, distortion_params=distortion_params,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)
@@ -487,6 +500,8 @@ class RawImage:
         on_advance: Callable[[int], None] | None = None,
         hot_pixel_map: np.ndarray | None = None,
         vignetting_grid: np.ndarray | None = None,
+        undistort: bool = False,
+        distortion_params: DistortionParams | None = None,
     ) -> None:
         """Save as TIFF.
 
@@ -521,6 +536,7 @@ class RawImage:
                 on_step=on_step, on_advance=on_advance,
                 hot_pixel_map=hot_pixel_map,
                 vignetting_grid=vignetting_grid,
+                undistort=undistort, distortion_params=distortion_params,
             )
             _step("saving")
             PILImage.fromarray(rgb8, mode="RGB").save(path)
