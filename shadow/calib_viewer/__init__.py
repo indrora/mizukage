@@ -69,6 +69,10 @@ def run_viewer(calib_dir: Path) -> None:
                 if data.device_model:
                     dpg.add_spacer(height=6)
                     dpg.add_text(data.device_model, wrap=_SIDEBAR_W - 12, color=[140, 140, 140])
+                if data.calib_timestamp:
+                    dpg.add_spacer(height=6)
+                    dpg.add_text("Calibrated:", color=[160, 200, 230])
+                    dpg.add_text(data.calib_timestamp, wrap=_SIDEBAR_W - 12, color=[140, 140, 140])
 
             # ── Main content area ─────────────────────────────────────────────
             with dpg.child_window(border=False, tag="content_area"):
