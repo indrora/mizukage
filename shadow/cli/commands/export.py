@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 import shadow
+from shadow._debayer import DemosaicKernel
 from shadow._types import AwbGains, CameraId
 
 console = Console()
@@ -100,6 +101,28 @@ _GAMMA = _GammaParamType()
     ),
 )
 @click.option(
+    "--kernel", "-k",
+    "kernel",
+    type=click.Choice(["bilinear", "malvar", "menon", "ddfapd"], case_sensitive=False),
+    default="bilinear",
+    show_default=True,
+    help=(
+        "Demosaicing algorithm. 'bilinear' (default) needs no extra deps. "
+        "'malvar' / 'menon' / 'ddfapd' require pip install shadow[demosaic]. "
+        "Ignored with --raw or --half-res."
+    ),
+)
+@click.option(
+    "--no-ccm",
+    is_flag=True,
+    default=False,
+    help=(
+        "Skip factory color correction matrix (sensor RGB → XYZ → sRGB). "
+        "When omitted the D65 forward_matrix from ColorProfile is applied when available. "
+        "Ignored with --raw."
+    ),
+)
+@click.option(
     "--no-awb",
     is_flag=True,
     default=False,
@@ -129,6 +152,8 @@ def export(
     no_subtract_black: bool,
     gamma: bool | float,
     exposure: float,
+    kernel: str,
+    no_ccm: bool,
     no_awb: bool,
     awb_r: float | None,
     awb_b: float | None,
@@ -160,7 +185,9 @@ def export(
         sys.exit(1)
 
     subtract_black = not no_subtract_black
+    apply_ccm = not no_ccm
     apply_awb = not no_awb
+    demosaic_kernel = DemosaicKernel(kernel)
 
     # Build AWB gains override if either channel was specified explicitly.
     awb_override: AwbGains | None = None
@@ -177,7 +204,7 @@ def export(
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
-    _print_settings(gamma, exposure, apply_awb, awb_override, raw)
+    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, raw)
 
     with Progress(
         SpinnerColumn(),
@@ -196,6 +223,7 @@ def export(
             kw = dict(
                 raw=raw, half_res=half_res, subtract_black=subtract_black,
                 apply_awb=apply_awb, awb_gains_override=awb_override,
+                apply_ccm=apply_ccm, kernel=demosaic_kernel,
                 gamma=gamma, exposure=exposure,
             )
             if fmt.lower() == "tiff":
@@ -217,17 +245,23 @@ def _print_settings(
     exposure: float,
     apply_awb: bool,
     awb_override: AwbGains | None,
+    apply_ccm: bool,
+    kernel: DemosaicKernel,
     raw: bool,
 ) -> None:
     if raw:
         return
     parts: list[str] = []
+    if kernel != DemosaicKernel.BILINEAR:
+        parts.append(f"kernel {kernel.value}")
     if exposure != 0.0:
         parts.append(f"exposure {exposure:+.2f} EV")
     if not apply_awb:
         parts.append("AWB off")
     elif awb_override is not None:
         parts.append(f"AWB R={awb_override.r:.3f} B={awb_override.b:.3f}")
+    if not apply_ccm:
+        parts.append("CCM off")
     if gamma is False:
         parts.append("gamma off")
     elif gamma is True:

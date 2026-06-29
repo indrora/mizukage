@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image as PILImage
 
+from shadow._debayer import DemosaicKernel
 from shadow._types import (
     AwbGains,
     BayerPattern,
@@ -19,6 +20,33 @@ from shadow._types import (
 
 # 10-bit data after black-level subtract: usable range [0 .. 1023-black_level]
 _10BIT_MAX = 1023
+
+# XYZ D50 (DNG Profile Connection Space) → linear sRGB.
+# The L16's forward_matrix maps white-balanced sensor RGB → XYZ D50, not D65.
+# This matrix applies the Bradford D50→D65 chromatic adaptation implicitly.
+_XYZ_D50_TO_SRGB_LINEAR = np.array([
+    [ 3.1338561, -1.6168667, -0.4906146],
+    [-0.9787684,  1.9161415,  0.0334540],
+    [ 0.0719453, -0.2289914,  1.4052427],
+], dtype=np.float32)
+
+
+def _apply_forward_matrix(rgb: np.ndarray, forward_matrix: tuple[float, ...]) -> np.ndarray:
+    """Apply factory forward_matrix (sensor RGB → XYZ D65) then XYZ → linear sRGB.
+
+    rgb: float32 (H, W, 3) normalized linear sensor RGB
+    forward_matrix: 9 floats, row-major, from ColorProfile
+
+    The two-step matrix multiplication converts the sensor's native primaries
+    to display-standard sRGB primaries. Output may fall outside [0..1] for
+    highly saturated colours; the subsequent gamma function clips before encoding.
+    """
+    fm = np.array(forward_matrix, dtype=np.float32).reshape(3, 3)
+    h, w = rgb.shape[:2]
+    flat = rgb.reshape(-1, 3)
+    xyz = flat @ fm.T                          # sensor RGB → XYZ D50
+    srgb = xyz @ _XYZ_D50_TO_SRGB_LINEAR.T    # XYZ D50 → linear sRGB
+    return srgb.reshape(h, w, 3)
 
 
 def _apply_gamma(normalized: np.ndarray, gamma: bool | float) -> np.ndarray:
@@ -141,6 +169,7 @@ class RawImage:
         subtract_black: bool = True,
         apply_awb: bool = True,
         awb_gains_override: AwbGains | None = None,
+        kernel: DemosaicKernel = DemosaicKernel.BILINEAR,
     ) -> np.ndarray:
         """Demosaic the raw Bayer data to an RGB array.
 
@@ -151,8 +180,11 @@ class RawImage:
         apply_awb=True  → apply per-channel white-balance gains before demosaicing
         awb_gains_override → if provided, use these gains instead of self.awb_gains
                              (only meaningful when apply_awb=True)
+        kernel          → demosaicing algorithm; see DemosaicKernel for choices.
+                          MALVAR/MENON/DDFAPD require ``pip install shadow[demosaic]``.
+                          half_res=True overrides to HALF regardless of kernel.
         """
-        from shadow._debayer import debayer_half, debayer_bilinear
+        from shadow._debayer import debayer_half, debayer_bilinear, debayer_colour
 
         raw = self.to_raw_numpy(subtract_black=subtract_black)
 
@@ -179,7 +211,11 @@ class RawImage:
 
         if half_res:
             return debayer_half(bayer, r_row, r_col)
-        return debayer_bilinear(bayer, r_row, r_col)
+
+        if kernel == DemosaicKernel.BILINEAR:
+            return debayer_bilinear(bayer, r_row, r_col)
+
+        return debayer_colour(bayer, r_row, r_col, kernel)
 
     # ── File export ───────────────────────────────────────────────────────────
 
@@ -190,18 +226,28 @@ class RawImage:
         subtract_black: bool,
         apply_awb: bool,
         awb_gains_override: AwbGains | None,
+        apply_ccm: bool,
+        kernel: DemosaicKernel,
         gamma: bool | float,
         exposure: float,
     ) -> np.ndarray:
-        """Shared debayer → normalise → exposure → gamma → uint8 path."""
+        """Shared debayer → normalise → CCM → exposure → gamma → uint8 path."""
         white = self.white_level if subtract_black else _10BIT_MAX
         rgb = self.to_debayered_numpy(
             half_res=half_res,
             subtract_black=subtract_black,
             apply_awb=apply_awb,
             awb_gains_override=awb_gains_override,
+            kernel=kernel,
         )
         normalized = (rgb / white).astype(np.float32)
+        if apply_ccm:
+            # Prefer the D65 profile; fall back to any available illuminant.
+            prof = self.color_profile(Illuminant.D65)
+            if prof is None and self.color_profiles:
+                prof = self.color_profiles[0]
+            if prof is not None:
+                normalized = _apply_forward_matrix(normalized, prof.forward_matrix)
         if exposure != 0.0:
             normalized *= 2.0 ** exposure
         normalized = _apply_gamma(normalized, gamma)
@@ -216,14 +262,20 @@ class RawImage:
         subtract_black: bool = True,
         apply_awb: bool = True,
         awb_gains_override: AwbGains | None = None,
+        apply_ccm: bool = True,
+        kernel: DemosaicKernel = DemosaicKernel.BILINEAR,
         gamma: bool | float = True,
         exposure: float = 0.0,
     ) -> None:
         """Save as PNG.
 
         raw=True  → 16-bit grayscale Bayer PNG (no demosaic; full bit depth)
-        raw=False → 8-bit RGB PNG (debayered, AWB-corrected, gamma-encoded by default)
+        raw=False → 8-bit RGB PNG (debayered, AWB-corrected, CCM-corrected, gamma-encoded)
 
+        apply_ccm: True (default) applies the factory forward_matrix (sensor RGB → XYZ D50 →
+                   linear sRGB) when a color profile is available.
+        kernel: demosaicing algorithm. BILINEAR (default) needs no extra deps; MALVAR/MENON/DDFAPD
+                require ``pip install shadow[demosaic]``. Ignored with raw=True or half_res=True.
         gamma: True  = sRGB transfer function (default)
                False = linear (will look very dark)
                float = simple power-law, e.g. gamma=2.2 → v^(1/2.2)
@@ -243,7 +295,7 @@ class RawImage:
             rgb8 = self._export_rgb8(
                 half_res=half_res, subtract_black=subtract_black,
                 apply_awb=apply_awb, awb_gains_override=awb_gains_override,
-                gamma=gamma, exposure=exposure,
+                apply_ccm=apply_ccm, kernel=kernel, gamma=gamma, exposure=exposure,
             )
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
@@ -256,15 +308,17 @@ class RawImage:
         subtract_black: bool = True,
         apply_awb: bool = True,
         awb_gains_override: AwbGains | None = None,
+        apply_ccm: bool = True,
+        kernel: DemosaicKernel = DemosaicKernel.BILINEAR,
         gamma: bool | float = True,
         exposure: float = 0.0,
     ) -> None:
         """Save as TIFF.
 
         raw=True  → 16-bit grayscale Bayer TIFF (full bit depth, scaled to uint16)
-        raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, gamma-encoded by default)
+        raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, CCM-corrected, gamma-encoded)
 
-        Same gamma / exposure / awb_gains_override semantics as to_png().
+        Same apply_ccm / kernel / gamma / exposure / awb_gains_override semantics as to_png().
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
@@ -279,7 +333,7 @@ class RawImage:
             rgb8 = self._export_rgb8(
                 half_res=half_res, subtract_black=subtract_black,
                 apply_awb=apply_awb, awb_gains_override=awb_gains_override,
-                gamma=gamma, exposure=exposure,
+                apply_ccm=apply_ccm, kernel=kernel, gamma=gamma, exposure=exposure,
             )
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
