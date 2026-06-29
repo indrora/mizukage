@@ -165,6 +165,18 @@ _GAMMA = _GammaParamType()
     ),
 )
 @click.option(
+    "--denoise-tile-size",
+    type=int,
+    default=512,
+    show_default=True,
+    metavar="PX",
+    help=(
+        "Tile size for DnCNN / DRUNet inference (pixels per side, default 512). "
+        "Increase to 1024 or 2048 on high-VRAM GPUs (24 GB can handle the full image "
+        "at 3120); reduce to 256 on 4-6 GB GPUs. Ignored for BM3D and bilateral."
+    ),
+)
+@click.option(
     "--awb-r",
     type=float,
     default=None,
@@ -194,6 +206,7 @@ def export(
     no_orient: bool,
     denoise_kernel: str | None,
     denoise_sigma: float,
+    denoise_tile_size: int,
     awb_r: float | None,
     awb_b: float | None,
 ) -> None:
@@ -245,7 +258,7 @@ def export(
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
-    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, raw)
+    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, denoise, denoise_sigma, denoise_tile_size, raw)
 
     with Progress(
         SpinnerColumn(),
@@ -268,6 +281,7 @@ def export(
                 gamma=gamma, exposure=exposure,
                 apply_orientation=apply_orientation,
                 denoise=denoise, denoise_sigma=denoise_sigma,
+                denoise_tile_size=denoise_tile_size,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
@@ -293,6 +307,7 @@ def _print_settings(
     apply_orientation: bool,
     denoise: DenoiseKernel | None,
     denoise_sigma: float,
+    denoise_tile_size: int,
     raw: bool,
 ) -> None:
     if raw:
@@ -309,7 +324,8 @@ def _print_settings(
     if not apply_ccm:
         parts.append("CCM off")
     if denoise is not None:
-        parts.append(f"denoise {denoise.value} sigma={denoise_sigma:.3f}")
+        tile_info = f" tile={denoise_tile_size}" if denoise in (DenoiseKernel.DNCNN, DenoiseKernel.DRUNET) else ""
+        parts.append(f"denoise {denoise.value} sigma={denoise_sigma:.3f}{tile_info}")
     if not apply_orientation:
         parts.append("orient off")
     if gamma is False:

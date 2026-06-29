@@ -106,18 +106,72 @@ def _deepinv_model(name: str, device) -> Any:
     return _model_cache[cache_key]
 
 
+def _tile_denoise(model_fn, t: "torch.Tensor", tile: int, overlap: int) -> "torch.Tensor":
+    """Run a denoising model in overlapping tiles to stay within VRAM limits.
+
+    Tiles are generated with the given step (tile - overlap). For each tile
+    the model runs on the full patch, but only the interior (excluding
+    overlap//2 on each non-edge side) is written to the output to avoid
+    seam artefacts from border effects in the model.
+
+    model_fn: callable (patch: Tensor[1,C,H,W]) → Tensor[1,C,H,W]
+    t:        input tensor, shape (1, C, H, W), on the target device
+    tile:     spatial size of each square tile (pixels)
+    overlap:  overlap strip width (pixels); must be even
+    """
+    import torch
+
+    _, C, H, W = t.shape
+    step = tile - overlap
+    half = overlap // 2
+
+    def _tile_starts(length: int) -> list[int]:
+        if length <= tile:
+            return [0]
+        pts = list(range(0, length - tile, step))
+        pts.append(length - tile)       # always include the trailing tile
+        return sorted(set(pts))
+
+    ys = _tile_starts(H)
+    xs = _tile_starts(W)
+
+    out = torch.zeros_like(t)
+
+    for i, y0 in enumerate(ys):
+        y1 = min(y0 + tile, H)
+        for j, x0 in enumerate(xs):
+            x1 = min(x0 + tile, W)
+
+            patch = t[:, :, y0:y1, x0:x1]
+            p_out = model_fn(patch)
+
+            # Crop strip to keep: skip overlap/2 on all interior (non-edge) sides
+            iy0 = half if i > 0 else 0
+            ix0 = half if j > 0 else 0
+            iy1 = (y1 - y0) - (half if i < len(ys) - 1 else 0)
+            ix1 = (x1 - x0) - (half if j < len(xs) - 1 else 0)
+
+            out[:, :, y0 + iy0:y0 + iy1, x0 + ix0:x0 + ix1] = \
+                p_out[:, :, iy0:iy1, ix0:ix1]
+
+    return out
+
+
 def denoise_image(
     rgb: np.ndarray,
     kernel: DenoiseKernel,
     sigma: float = 0.05,
+    tile_size: int = 512,
 ) -> np.ndarray:
     """Denoise a float32 (H, W, 3) linear RGB image in [0, 1].
 
-    rgb:    float32 array, shape (H, W, 3), values in [0, 1].
-    kernel: algorithm to use; see DenoiseKernel.
-    sigma:  noise strength estimate. Range 0.02 (subtle) to 0.15 (heavy).
-            Meaning: sigma_psd for BM3D; colour/space sigma for BILATERAL;
-            noise std dev for DNCNN / DRUNET. Default 0.05.
+    rgb:       float32 array, shape (H, W, 3), values in [0, 1].
+    kernel:    algorithm to use; see DenoiseKernel.
+    sigma:     noise strength estimate. Range 0.02 (subtle) to 0.15 (heavy).
+               Meaning: sigma_psd for BM3D; colour/space sigma for BILATERAL;
+               noise std dev for DNCNN / DRUNET. Default 0.05.
+    tile_size: spatial tile size for DnCNN / DRUNet (default 512). Reduce to
+               256 or 128 if you run out of VRAM. Ignored by BM3D / BILATERAL.
 
     Returns float32 (H, W, 3) with the same value range.
     """
@@ -158,8 +212,18 @@ def denoise_image(
         device = _best_torch_device()
         model = _deepinv_model(kernel.value, device)
         t = torch.from_numpy(rgb.transpose(2, 0, 1)[np.newaxis]).to(device)
-        with torch.no_grad():
-            result = model(t, sigma=sigma)
+
+        H, W = rgb.shape[:2]
+        overlap = max(32, tile_size // 8)
+        model_fn = lambda patch: model(patch, sigma=sigma)   # noqa: E731
+
+        if H <= tile_size and W <= tile_size:
+            with torch.no_grad():
+                result = model_fn(t)
+        else:
+            with torch.no_grad():
+                result = _tile_denoise(model_fn, t, tile=tile_size, overlap=overlap)
+
         return result[0].permute(1, 2, 0).cpu().numpy().astype(np.float32)
 
     raise ValueError(f"Unknown denoise kernel: {kernel!r}")  # pragma: no cover
