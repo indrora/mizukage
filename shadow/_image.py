@@ -219,6 +219,14 @@ class RawImage:
 
     # ── File export ───────────────────────────────────────────────────────────
 
+    def _orient(self, arr: np.ndarray) -> np.ndarray:
+        """Apply sensor flip flags to a 2-D or 3-D array (H, W[, C])."""
+        if self.flip_h:
+            arr = np.fliplr(arr)
+        if self.flip_v:
+            arr = np.flipud(arr)
+        return arr
+
     def _export_rgb8(
         self,
         *,
@@ -230,8 +238,9 @@ class RawImage:
         kernel: DemosaicKernel,
         gamma: bool | float,
         exposure: float,
+        apply_orientation: bool,
     ) -> np.ndarray:
-        """Shared debayer → normalise → CCM → exposure → gamma → uint8 path."""
+        """Shared debayer → normalise → CCM → exposure → gamma → orient → uint8 path."""
         white = self.white_level if subtract_black else _10BIT_MAX
         rgb = self.to_debayered_numpy(
             half_res=half_res,
@@ -256,7 +265,10 @@ class RawImage:
         if exposure != 0.0:
             normalized *= 2.0 ** exposure
         normalized = _apply_gamma(normalized, gamma)
-        return (normalized * 255.0).clip(0, 255).astype(np.uint8)
+        result = (normalized * 255.0).clip(0, 255).astype(np.uint8)
+        if apply_orientation:
+            result = self._orient(result)
+        return result
 
     def to_png(
         self,
@@ -271,6 +283,7 @@ class RawImage:
         kernel: DemosaicKernel = DemosaicKernel.BILINEAR,
         gamma: bool | float = True,
         exposure: float = 0.0,
+        apply_orientation: bool = True,
     ) -> None:
         """Save as PNG.
 
@@ -286,6 +299,7 @@ class RawImage:
                float = simple power-law, e.g. gamma=2.2 → v^(1/2.2)
         exposure: EV stop adjustment applied before gamma (+1.0 = twice as bright)
         awb_gains_override: if provided, use these gains instead of the file's gains
+        apply_orientation: True (default) honours flip_h/flip_v from the sensor proto.
 
         Note: Pillow does not support 16-bit RGB PNG natively. Use to_tiff()
         for 16-bit per-channel debayered output.
@@ -301,6 +315,7 @@ class RawImage:
                 half_res=half_res, subtract_black=subtract_black,
                 apply_awb=apply_awb, awb_gains_override=awb_gains_override,
                 apply_ccm=apply_ccm, kernel=kernel, gamma=gamma, exposure=exposure,
+                apply_orientation=apply_orientation,
             )
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 
@@ -317,13 +332,15 @@ class RawImage:
         kernel: DemosaicKernel = DemosaicKernel.BILINEAR,
         gamma: bool | float = True,
         exposure: float = 0.0,
+        apply_orientation: bool = True,
     ) -> None:
         """Save as TIFF.
 
         raw=True  → 16-bit grayscale Bayer TIFF (full bit depth, scaled to uint16)
         raw=False → 8-bit RGB TIFF (debayered, AWB-corrected, CCM-corrected, gamma-encoded)
 
-        Same apply_ccm / kernel / gamma / exposure / awb_gains_override semantics as to_png().
+        Same apply_ccm / kernel / gamma / exposure / awb_gains_override / apply_orientation
+        semantics as to_png().
 
         For 16-bit per-channel RGB TIFF, use to_raw_numpy() with the
         `tifffile` library directly.
@@ -339,6 +356,7 @@ class RawImage:
                 half_res=half_res, subtract_black=subtract_black,
                 apply_awb=apply_awb, awb_gains_override=awb_gains_override,
                 apply_ccm=apply_ccm, kernel=kernel, gamma=gamma, exposure=exposure,
+                apply_orientation=apply_orientation,
             )
             PILImage.fromarray(rgb8, mode="RGB").save(path)
 

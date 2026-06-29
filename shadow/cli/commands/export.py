@@ -129,6 +129,16 @@ _GAMMA = _GammaParamType()
     help="Skip white-balance gains entirely.",
 )
 @click.option(
+    "--no-orient",
+    is_flag=True,
+    default=False,
+    help=(
+        "Skip sensor orientation correction (flip_h / flip_v from the camera module proto). "
+        "By default the image is flipped to match the sensor's physical mounting. "
+        "Ignored with --raw."
+    ),
+)
+@click.option(
     "--awb-r",
     type=float,
     default=None,
@@ -155,6 +165,7 @@ def export(
     kernel: str,
     no_ccm: bool,
     no_awb: bool,
+    no_orient: bool,
     awb_r: float | None,
     awb_b: float | None,
 ) -> None:
@@ -187,6 +198,7 @@ def export(
     subtract_black = not no_subtract_black
     apply_ccm = not no_ccm
     apply_awb = not no_awb
+    apply_orientation = not no_orient
     demosaic_kernel = DemosaicKernel(kernel)
 
     # Build AWB gains override if either channel was specified explicitly.
@@ -204,7 +216,7 @@ def export(
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
-    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, raw)
+    _print_settings(gamma, exposure, apply_awb, awb_override, apply_ccm, demosaic_kernel, apply_orientation, raw)
 
     with Progress(
         SpinnerColumn(),
@@ -225,6 +237,7 @@ def export(
                 apply_awb=apply_awb, awb_gains_override=awb_override,
                 apply_ccm=apply_ccm, kernel=demosaic_kernel,
                 gamma=gamma, exposure=exposure,
+                apply_orientation=apply_orientation,
             )
             if fmt.lower() == "tiff":
                 img.to_tiff(dest, **kw)
@@ -247,6 +260,7 @@ def _print_settings(
     awb_override: AwbGains | None,
     apply_ccm: bool,
     kernel: DemosaicKernel,
+    apply_orientation: bool,
     raw: bool,
 ) -> None:
     if raw:
@@ -262,6 +276,8 @@ def _print_settings(
         parts.append(f"AWB R={awb_override.r:.3f} B={awb_override.b:.3f}")
     if not apply_ccm:
         parts.append("CCM off")
+    if not apply_orientation:
+        parts.append("orient off")
     if gamma is False:
         parts.append("gamma off")
     elif gamma is True:
