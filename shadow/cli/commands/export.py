@@ -49,6 +49,12 @@ console = Console()
     default=False,
     help="Skip black level subtraction.",
 )
+@click.option(
+    "--no-awb",
+    is_flag=True,
+    default=False,
+    help="Skip white-balance gains (export raw linear colour).",
+)
 def export(
     file: str,
     out_dir: str,
@@ -57,6 +63,7 @@ def export(
     raw: bool,
     half_res: bool,
     no_subtract_black: bool,
+    no_awb: bool,
 ) -> None:
     """Export camera module images from an LRI file.
 
@@ -83,6 +90,7 @@ def export(
         sys.exit(1)
 
     subtract_black = not no_subtract_black
+    apply_awb = not no_awb
     ext = "." + fmt.lower()
     suffix = "_raw" if raw else ""
 
@@ -101,9 +109,11 @@ def export(
             progress.update(task, description=f"Exporting {name}")
 
             if fmt.lower() == "tiff":
-                img.to_tiff(dest, raw=raw, half_res=half_res, subtract_black=subtract_black)
+                img.to_tiff(dest, raw=raw, half_res=half_res,
+                            subtract_black=subtract_black, apply_awb=apply_awb)
             else:
-                img.to_png(dest, raw=raw, half_res=half_res, subtract_black=subtract_black)
+                img.to_png(dest, raw=raw, half_res=half_res,
+                           subtract_black=subtract_black, apply_awb=apply_awb)
 
             progress.advance(task)
 

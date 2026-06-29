@@ -139,14 +139,16 @@ channel). Values are in `[0..white_level]` by default, or `[0..1023]` with
 
 ```python
 to_debayered_numpy(
-    *, half_res: bool = False, subtract_black: bool = True
+    *, half_res: bool = False, subtract_black: bool = True, apply_awb: bool = True
 ) -> np.ndarray
 ```
-Demosaic the Bayer array to RGB.
+Demosaic the Bayer array to RGB. Always returns float32.
 
-- `half_res=False` (default): bilinear full-resolution, returns float32
-  `(height, width, 3)` with values in `[0..white_level]`.
-- `half_res=True`: fast subsample, returns uint16 `(height/2, width/2, 3)`.
+- `half_res=False` (default): bilinear full-resolution, `(height, width, 3)`.
+- `half_res=True`: fast subsampling, `(height/2, width/2, 3)`.
+- `apply_awb=True` (default): applies the file's white-balance gains to the
+  Bayer array before demosaicing so interpolation happens in a balanced colour
+  space. Pass `apply_awb=False` for raw linear output.
 
 For mono sensors, returns the single channel replicated to three identical
 channels.
@@ -157,6 +159,7 @@ to_png(
     *, raw: bool = False,
     half_res: bool = False,
     subtract_black: bool = True,
+    apply_awb: bool = True,
 ) -> None
 ```
 Save as PNG.
@@ -173,6 +176,7 @@ to_tiff(
     *, raw: bool = False,
     half_res: bool = False,
     subtract_black: bool = True,
+    apply_awb: bool = True,
 ) -> None
 ```
 Save as TIFF. Same `raw`/`half_res` semantics as `to_png()`.

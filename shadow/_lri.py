@@ -134,6 +134,7 @@ class LriFile:
                 img.sensor_model = sensor_id_map[img.camera_id]
             if img.camera_id in color_profiles_by_cam:
                 img.color_profiles = color_profiles_by_cam[img.camera_id]
+            img.awb_gains = metadata.awb_gains  # same gains apply to all modules
 
         return cls(images, metadata, color_profiles_by_cam)
 

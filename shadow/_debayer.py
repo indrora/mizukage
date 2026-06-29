@@ -11,18 +11,16 @@ import numpy as np
 def debayer_half(bayer: np.ndarray, r_row: int, r_col: int) -> np.ndarray:
     """Fast half-resolution demosaic by subsampling each Bayer channel.
 
-    Returns uint16 array of shape (H/2, W/2, 3) — R, G, B.
+    Returns float32 array of shape (H/2, W/2, 3) — R, G, B.
     Suitable for quick previews; output is half the sensor resolution.
     """
     b_row, b_col = 1 - r_row, 1 - r_col
+    f = bayer.astype(np.float32)
 
-    R = bayer[r_row::2, r_col::2].astype(np.uint16)
-    B = bayer[b_row::2, b_col::2].astype(np.uint16)
+    R = f[r_row::2, r_col::2]
+    B = f[b_row::2, b_col::2]
     # Average the two green sub-channels
-    G = (
-        (bayer[r_row::2, b_col::2].astype(np.uint32) + bayer[b_row::2, r_col::2])
-        >> 1
-    ).astype(np.uint16)
+    G = (f[r_row::2, b_col::2] + f[b_row::2, r_col::2]) * 0.5
 
     return np.stack([R, G, B], axis=2)
 
