@@ -24,7 +24,27 @@ console = Console()
 @click.option("--cameras", is_flag=True, help="Show per-camera capture settings.")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 def info(file: str, blocks: bool, cameras: bool, as_json: bool) -> None:
-    """Display metadata for an LRI or LRIS file."""
+    """Display metadata for an LRI or LRIS file.
+
+    For LRI files shows: capture timestamp, image ID, focal length, device
+    model, firmware version, AWB gains and mode, HDR/scene mode, GPS
+    coordinates, and the number of camera modules captured.
+
+    Use --cameras for per-module details: sensor model, resolution, Bayer
+    pattern, raw format, ISO gain, exposure time, focus hall code, and
+    flip/orientation flags.
+
+    Use --blocks to inspect the raw LELR block layout (offsets, sizes, types).
+
+    For LRIS sidecar files shows depth-map dimensions and confidence range.
+
+    Examples:
+
+        shadow info photo.lri
+        shadow info photo.lri --cameras
+        shadow info photo.lri --json | jq .metadata
+        shadow info photo.lris
+    """
     path = Path(file)
     suffix = path.suffix.lower()
 
