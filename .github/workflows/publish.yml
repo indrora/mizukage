@@ -2,12 +2,9 @@ name: "Publish release to PyPI"
 
 on:
   push:
-    tags:
-      # Publish on any tag starting with a `v`, e.g., v0.1.0
-      - v*
 
 jobs:
-  run:
+  build:
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -21,7 +18,22 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       - name: Install Python 
         run: uv python install
+      - name: Local install
+        run: uv install -e .
+      - name: Check package runs
+        run: uv run mizukage --help
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
       - name: Build
         run: uv build
       - name: Publish
         run: uv publish
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
