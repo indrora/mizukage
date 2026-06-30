@@ -1,5 +1,5 @@
 [project]
-name = "shadow"
+name = "mizukage"
 version = "0.1.0"
 description = "Library and tools for reading Light L16 LRI camera files"
 readme = "README.md"
@@ -33,7 +33,7 @@ explorer = [
 ]
 
 [project.scripts]
-shadow = "shadow.cli.main:cli"
+mizukage = "mizukage.cli.main:cli"
 
 [build-system]
 requires = ["hatchling"]
