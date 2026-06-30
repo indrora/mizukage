@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from shadow.calib_viewer._data import CalibData
+    from mizukage.calib_viewer._data import CalibData
 
 # Down-sample grid for heat_series display (cols x rows)
 _GRID_W = 104   # 4160 / 40

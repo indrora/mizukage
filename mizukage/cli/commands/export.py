@@ -17,12 +17,12 @@ from rich.progress import (
 )
 from rich.table import Column
 
-import shadow
-from shadow._calib import compute_scalar_sigma, load_distortion_params, load_vst_model
-from shadow._calib import DistortionParams
-from shadow._debayer import DemosaicKernel
-from shadow._denoise import DenoiseKernel
-from shadow._types import AwbGains, CameraId
+import mizukage
+from mizukage._calib import compute_scalar_sigma, load_distortion_params, load_vst_model
+from mizukage._calib import DistortionParams
+from mizukage._debayer import DemosaicKernel
+from mizukage._denoise import DenoiseKernel
+from mizukage._types import AwbGains, CameraId
 
 console = Console()
 
@@ -268,7 +268,7 @@ def export(
         shadow export photo.lri ./out --gamma linear
         shadow export photo.lri ./out --camera B4 --calib images/lightcal
     """
-    lri = shadow.open_lri(file)
+    lri = mizukage.open_lri(file)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -381,17 +381,17 @@ def export(
             if calib_dir is not None:
                 cam_id = img.camera_id
                 if cam_id not in hp_cache:
-                    from shadow._calib import load_hot_pixel_map
+                    from mizukage._calib import load_hot_pixel_map
                     hp_cache[cam_id] = load_hot_pixel_map(Path(calib_dir), cam_id)
                 hot_pixel_map = hp_cache[cam_id]
 
                 if cam_id not in vig_cache:
-                    from shadow._calib import load_vignetting_grid
+                    from mizukage._calib import load_vignetting_grid
                     vig_cache[cam_id] = load_vignetting_grid(Path(calib_dir), cam_id)
                 vignetting_grid = vig_cache[cam_id]
 
                 if cam_id not in dp_cache:
-                    from shadow._calib import load_distortion_params
+                    from mizukage._calib import load_distortion_params
                     dp_cache[cam_id] = load_distortion_params(Path(calib_dir), cam_id)
 
             distortion_params: DistortionParams | None = None
@@ -491,7 +491,7 @@ def _image_steps(img, half_res: bool, raw: bool,
       save             → 1
     raw export skips everything except save, so it returns 1.
     """
-    from shadow._denoise import count_tiles
+    from mizukage._denoise import count_tiles
 
     if raw:
         return 1

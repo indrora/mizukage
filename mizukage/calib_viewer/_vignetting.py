@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from shadow.calib_viewer._data import CalibData
+    from mizukage.calib_viewer._data import CalibData
 
 _TAG_GROUP = "vig_group"
 

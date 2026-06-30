@@ -1,7 +1,7 @@
-"""shadow.calib_viewer — DearPyGui calibration data explorer.
+"""mizukage.calib_viewer — DearPyGui calibration data explorer.
 
 Entry point: run_viewer(calib_dir)
-Requires: pip install 'shadow[explorer]'
+Requires: pip install 'mizukage[explorer]'
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ def run_viewer(calib_dir: Path) -> None:
     """Open the interactive calibration viewer for *calib_dir*."""
     import dearpygui.dearpygui as dpg
 
-    from shadow.calib_viewer._data import load_calib_data
-    from shadow.calib_viewer import _hotpixels, _noise, _vignetting, _geometry, _color, _layout
+    from mizukage.calib_viewer._data import load_calib_data
+    from mizukage.calib_viewer import _hotpixels, _noise, _vignetting, _geometry, _color, _layout
 
     # ── Load calibration data (once, at startup) ─────────────────────────────
     data = load_calib_data(calib_dir)
@@ -28,7 +28,7 @@ def run_viewer(calib_dir: Path) -> None:
     # ── DearPyGui setup ───────────────────────────────────────────────────────
     dpg.create_context()
     dpg.create_viewport(
-        title=f"shadow calib-view — {calib_dir}",
+        title=f"mizukage calib-view — {calib_dir}",
         width=_WIN_W,
         height=_WIN_H,
         min_width=800,

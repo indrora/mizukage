@@ -1,17 +1,17 @@
-"""shadow CLI — Light L16 LRI/LRIS file reader."""
+"""mizukage CLI — Light L16 LRI/LRIS file reader."""
 import click
 
-from shadow.cli.commands.calib import calib
-from shadow.cli.commands.calib_view import calib_view
-from shadow.cli.commands.info import info
-from shadow.cli.commands.extract import extract
-from shadow.cli.commands.export import export
+from mizukage.cli.commands.calib import calib
+from mizukage.cli.commands.calib_view import calib_view
+from mizukage.cli.commands.info import info
+from mizukage.cli.commands.extract import extract
+from mizukage.cli.commands.export import export
 
 
 @click.group()
-@click.version_option(package_name="shadow")
+@click.version_option(package_name="mizukage")
 def cli() -> None:
-    """shadow: Light L16 LRI/LRIS camera file reader.
+    """mizukage: Light L16 LRI/LRIS camera file reader.
 
     Read metadata, extract raw Bayer data, and export images from
     Light L16 multi-camera LRI files.

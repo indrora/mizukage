@@ -3,16 +3,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from shadow._block import BlockType, iter_blocks
-from shadow._image import RawImage
-from shadow._types import (
+from mizukage._block import BlockType, iter_blocks
+from mizukage._image import RawImage
+from mizukage._types import (
     CameraId,
     CaptureMetadata,
     ColorProfile,
     RawFormat,
     SensorModel,
 )
-import shadow._proto as _proto
+import mizukage._proto as _proto
 
 
 def _make_empty_metadata() -> CaptureMetadata:

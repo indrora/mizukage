@@ -42,5 +42,5 @@ def calib_view(calib_dir: str) -> None:
             "shadow[explorer] is not installed.\n"
             "Run: pip install 'shadow[explorer]'"
         )
-    from shadow.calib_viewer import run_viewer
+    from mizukage.calib_viewer import run_viewer
     run_viewer(Path(calib_dir))

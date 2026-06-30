@@ -36,12 +36,12 @@ _CAM_ORDER = [
 
 def load_calib_data(calib_dir: Path) -> CalibData:
     """Parse calibration.lri and hotpixel.rec; return CalibData."""
-    from shadow._block import iter_blocks, BlockType
-    import shadow._proto as _proto
-    from shadow._calib import load_vst_model, load_hot_pixel_map
-    from shadow._types import CameraId
+    from mizukage._block import iter_blocks, BlockType
+    import mizukage._proto as _proto
+    from mizukage._calib import load_vst_model, load_hot_pixel_map
+    from mizukage._types import CameraId
     from google.protobuf.json_format import MessageToDict
-    from shadow.proto import camera_id_pb2
+    from mizukage.proto import camera_id_pb2
     import struct, zlib
 
     cal_path = calib_dir / "calibration.lri"
@@ -212,7 +212,7 @@ def load_calib_data(calib_dir: Path) -> CalibData:
     if hp_path.exists():
         # Reparse hotpixel.rec for stats (exposure, temp, gain per measurement)
         raw_hp = hp_path.read_bytes()
-        from shadow._block import iter_blocks, BlockType
+        from mizukage._block import iter_blocks, BlockType
         for block_start, hdr in iter_blocks(raw_hp):
             if hdr.msg_type != BlockType.LIGHT_HEADER:
                 continue
@@ -229,7 +229,7 @@ def load_calib_data(calib_dir: Path) -> CalibData:
             for mc in lh.module_calibration:
                 if not mc.HasField("hot_pixel_map"):
                     continue
-                from shadow.proto import camera_id_pb2
+                from mizukage.proto import camera_id_pb2
                 cam = camera_id_pb2.CameraID.Name(mc.camera_id)
                 measurements = []
                 for meas in mc.hot_pixel_map.data:
@@ -261,7 +261,7 @@ def load_calib_data(calib_dir: Path) -> CalibData:
         for cam in all_cams:
             try:
                 cam_id_int = _CAM_ORDER.index(cam)
-                from shadow._types import CameraId as CID
+                from mizukage._types import CameraId as CID
                 cam_enum = CID(cam_id_int)
                 hp_bitmaps[cam] = load_hot_pixel_map(calib_dir, cam_enum)
             except Exception:

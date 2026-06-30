@@ -1,66 +1,66 @@
-# shadow
+# mizukage
 
 A Python library and CLI for reading Light L16 camera files — raw image data, depth maps, and factory calibration.
 
-The Light L16 is a 16-lens computational camera. Each capture fires up to 16 independent sensors across three focal lengths (28 mm / 70 mm / 150 mm equivalent), producing a bundle of `.lri` raw files and an optional `.lris` depth-map sidecar. `shadow` parses the proprietary LELR block-stream format, exposes sensor data as NumPy arrays, and can export processed images with full calibration applied.
+The Light L16 is a 16-lens computational camera. Each capture fires up to 16 independent sensors across three focal lengths (28 mm / 70 mm / 150 mm equivalent), producing a bundle of `.lri` raw files and an optional `.lris` depth-map sidecar. `mizukage` parses the proprietary LELR block-stream format, exposes sensor data as NumPy arrays, and can export processed images with full calibration applied.
 
 ---
 
 ## Installation
 
 ```bash
-pip install shadow
+pip install mizukage
 # or with uv:
-uv add shadow
+uv add mizukage
 ```
 
 Optional dependency groups:
 
 | Group | Adds |
 |-------|------|
-| `shadow[demosaic]` | Malvar 2004, Menon 2007, and DDFAPD high-quality debayering |
-| `shadow[denoise]` | BM3D denoising (CPU) |
-| `shadow[denoise-gpu]` | GPU bilateral, DnCNN, and DRUNet via kornia + deepinv + PyTorch |
-| `shadow[explorer]` | `shadow calib-view` interactive calibration viewer (DearPyGui) |
+| `mizukage[demosaic]` | Malvar 2004, Menon 2007, and DDFAPD high-quality debayering |
+| `mizukage[denoise]` | BM3D denoising (CPU) |
+| `mizukage[denoise-gpu]` | GPU bilateral, DnCNN, and DRUNet via kornia + deepinv + PyTorch |
+| `mizukage[explorer]` | `mizukage calib-view` interactive calibration viewer (DearPyGui) |
 
 ---
 
 ## CLI
 
-### `shadow info`
+### `mizukage info`
 
 Print metadata from an LRI or LRIS file.
 
 ```
-shadow info photo.lri
-shadow info photo.lri --cameras     # per-camera exposure, gain, AWB, focus
-shadow info photo.lri --blocks      # raw LELR block layout and sizes
-shadow info photo.lri --json        # machine-readable JSON
-shadow info photo.lris              # depth-map sidecar metadata
+mizukage info photo.lri
+mizukage info photo.lri --cameras     # per-camera exposure, gain, AWB, focus
+mizukage info photo.lri --blocks      # raw LELR block layout and sizes
+mizukage info photo.lri --json        # machine-readable JSON
+mizukage info photo.lris              # depth-map sidecar metadata
 ```
 
-### `shadow export`
+### `mizukage export`
 
 Export each camera module's image from an LRI file.
 
 ```bash
 # All cameras -> PNG, debayered + AWB + sRGB gamma
-shadow export photo.lri ./out
+mizukage export photo.lri ./out
 
 # Single camera, TIFF, +1 stop exposure
-shadow export photo.lri ./out --camera B4 --format tiff --exposure +1.0
+mizukage export photo.lri ./out --camera B4 --format tiff --exposure +1.0
 
 # Raw 16-bit Bayer (no debayering)
-shadow export photo.lri ./out --raw
+mizukage export photo.lri ./out --raw
 
-# High-quality demosaic (requires shadow[demosaic])
-shadow export photo.lri ./out --kernel menon
+# High-quality demosaic (requires mizukage[demosaic])
+mizukage export photo.lri ./out --kernel menon
 
 # With factory calibration: hot-pixel correction + sigma-matched denoising
-shadow export photo.lri ./out --calib images/lightcal --denoise bm3d
+mizukage export photo.lri ./out --calib images/lightcal --denoise bm3d
 
 # Full calibration pipeline: hot-pixel + vignetting + undistortion + denoising
-shadow export photo.lri ./out \
+mizukage export photo.lri ./out \
     --calib images/lightcal \
     --denoise bm3d \
     --undistort
@@ -79,36 +79,36 @@ When `--calib DIR` points at a `lightcal` directory, corrections are applied in 
 5. **Lens undistortion** (if `--undistort`) — inverse-map radial polynomial from `calibration.lri`
 6. **Gamma / tone mapping**
 
-### `shadow extract`
+### `mizukage extract`
 
 Dump raw Bayer data as NumPy `.npy` files (one `uint16` array per camera).
 
 ```bash
-shadow extract photo.lri ./raw
-shadow extract photo.lri ./raw --camera B4 --camera C1
-shadow extract photo.lri ./raw --no-subtract-black   # keep sensor black-level offset
+mizukage extract photo.lri ./raw
+mizukage extract photo.lri ./raw --camera B4 --camera C1
+mizukage extract photo.lri ./raw --no-subtract-black   # keep sensor black-level offset
 ```
 
 A `metadata.json` summary is written alongside the arrays unless `--no-metadata` is given.
 
-### `shadow calib`
+### `mizukage calib`
 
 Inspect a `lightcal` calibration directory as text or JSON.
 
 ```bash
-shadow calib images/lightcal
-shadow calib images/lightcal --json   # full calibration data, all cameras
+mizukage calib images/lightcal
+mizukage calib images/lightcal --json   # full calibration data, all cameras
 ```
 
 Reports geometry (intrinsics, distortion, focus bundles), colour matrices, vignetting grids, sensor characteristics, and hot-pixel statistics.
 
-### `shadow calib-view`
+### `mizukage calib-view`
 
-Interactive GUI explorer for a `lightcal` directory (requires `shadow[explorer]`).
+Interactive GUI explorer for a `lightcal` directory (requires `mizukage[explorer]`).
 
 ```bash
-pip install 'shadow[explorer]'
-shadow calib-view images/lightcal
+pip install 'mizukage[explorer]'
+mizukage calib-view images/lightcal
 ```
 
 Select a camera from the sidebar to populate six tabs:
@@ -131,9 +131,9 @@ The sidebar shows sensor black/white levels, device model, and calibration date.
 ### Opening a file
 
 ```python
-import shadow
+import mizukage
 
-lri = shadow.open_lri("photo.lri")
+lri = mizukage.open_lri("photo.lri")
 ```
 
 ### Metadata
@@ -152,7 +152,7 @@ print(meta.awb_gains)         # AwbGains(r, gr, gb, b) | None
 for img in lri.images:
     print(img.camera_id, img.width, img.height)
 
-img = lri.get_image(shadow.CameraId.B4)
+img = lri.get_image(mizukage.CameraId.B4)
 ```
 
 ### Exporting
@@ -175,8 +175,8 @@ rgb = img.to_debayered_numpy()
 
 ```python
 from pathlib import Path
-from shadow._calib import load_hot_pixel_map, load_distortion_params, load_vignetting_grid
-from shadow._types import CameraId
+from mizukage._calib import load_hot_pixel_map, load_distortion_params, load_vignetting_grid
+from mizukage._types import CameraId
 
 calib_dir = Path("images/lightcal")
 cam = CameraId.B4
@@ -193,7 +193,7 @@ img.to_png(
 ### Depth maps (LRIS)
 
 ```python
-lris = shadow.open_lris("photo.lris")
+lris = mizukage.open_lris("photo.lris")
 depth = lris.depth_map       # float32 NumPy array, metres
 conf  = lris.confidence_map  # float32, 0-1
 ```
@@ -210,7 +210,7 @@ conf  = lris.confidence_map  # float32, 0-1
 | `VIEW_PREFERENCES` (1) | App-level display preferences |
 | `GPS_DATA` (2) | GPS coordinates and timestamp |
 
-Image data (raw Bayer or JPEG-compressed Bayer) is stored as binary blobs with offsets recorded in the `LIGHT_HEADER` protobuf. `shadow` reads these via direct byte slices without copying the entire payload into protobuf fields.
+Image data (raw Bayer or JPEG-compressed Bayer) is stored as binary blobs with offsets recorded in the `LIGHT_HEADER` protobuf. `mizukage` reads these via direct byte slices without copying the entire payload into protobuf fields.
 
 Calibration files use the same LELR format. `calibration.lri` holds per-camera `FactoryModuleCalibration` blocks; `hotpixel.rec` embeds zlib-compressed defect bitmaps.
 

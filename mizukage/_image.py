@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PIL import Image as PILImage
 
-from shadow._debayer import DemosaicKernel
-from shadow._denoise import DenoiseKernel, DenoiseFn
-from shadow._types import (
+from mizukage._debayer import DemosaicKernel
+from mizukage._denoise import DenoiseKernel, DenoiseFn
+from mizukage._types import (
     AwbGains,
     BayerPattern,
     CameraId,
@@ -23,7 +23,7 @@ from shadow._types import (
 )
 
 if TYPE_CHECKING:
-    from shadow._calib import DistortionParams
+    from mizukage._calib import DistortionParams
 
 # 10-bit data after black-level subtract: usable range [0 .. 1023-black_level]
 _10BIT_MAX = 1023
@@ -178,7 +178,7 @@ class RawImage:
             are replaced with the bilinear mean of their same-channel neighbours
             *before* black-level subtraction.
         """
-        from shadow._unpack import unpack_10bpp, decode_bjpg
+        from mizukage._unpack import unpack_10bpp, decode_bjpg
 
         match self.raw_format:
             case RawFormat.PACKED_10BPP | RawFormat.PACKED_12BPP | RawFormat.PACKED_14BPP:
@@ -204,7 +204,7 @@ class RawImage:
         # Apply hot-pixel correction on the raw Bayer array before any other
         # processing.  Mono sensors have no Bayer pattern so we skip them.
         if hot_pixel_map is not None and self.bayer_r_row is not None:
-            from shadow._calib import apply_hot_pixel_correction
+            from mizukage._calib import apply_hot_pixel_correction
             arr = apply_hot_pixel_correction(
                 arr, hot_pixel_map, self.bayer_r_row, self.bayer_r_col
             )
@@ -244,7 +244,7 @@ class RawImage:
                           BEFORE AWB gains so each raw Bayer pixel is multiplied by
                           its per-camera factory correction factor.
         """
-        from shadow._debayer import debayer_half, debayer_bilinear, debayer_colour
+        from mizukage._debayer import debayer_half, debayer_bilinear, debayer_colour
 
         raw = self.to_raw_numpy(subtract_black=subtract_black, hot_pixel_map=hot_pixel_map)
 
@@ -265,7 +265,7 @@ class RawImage:
             # Apply vignetting correction before AWB so each raw pixel is scaled
             # by its per-camera factory correction factor first.
             if vignetting_grid is not None:
-                from shadow._calib import apply_vignetting_correction
+                from mizukage._calib import apply_vignetting_correction
                 bayer = apply_vignetting_correction(bayer, vignetting_grid)
             bayer[r_row::2, r_col::2] *= gains.r
             bayer[r_row::2, b_col::2] *= gains.gr
@@ -275,7 +275,7 @@ class RawImage:
             bayer = raw.astype(np.float32)
             # Apply vignetting correction even when AWB is skipped.
             if vignetting_grid is not None:
-                from shadow._calib import apply_vignetting_correction
+                from mizukage._calib import apply_vignetting_correction
                 bayer = apply_vignetting_correction(bayer, vignetting_grid)
 
         if half_res:
@@ -359,7 +359,7 @@ class RawImage:
                 else getattr(denoise, "__name__", "custom")
             )
             _step(f"denoising ({denoise_label})")
-            from shadow._denoise import denoise_image
+            from mizukage._denoise import denoise_image
             # Clip before denoising: values must be in [0, 1] for BM3D.
             np.clip(normalized, 0.0, 1.0, out=normalized)
             normalized = denoise_image(
@@ -387,7 +387,7 @@ class RawImage:
             normalized *= 2.0 ** exposure
         if undistort and distortion_params is not None:
             _step("undistorting")
-            from shadow._calib import undistort_image
+            from mizukage._calib import undistort_image
             normalized = undistort_image(normalized, distortion_params)
         normalized = _apply_gamma(normalized, gamma)
         result = (normalized * 255.0).clip(0, 255).astype(np.uint8)

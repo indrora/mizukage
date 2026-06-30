@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from shadow.calib_viewer._data import CalibData
+    from mizukage.calib_viewer._data import CalibData
 
 _TAG_GROUP = "geo_group"
 

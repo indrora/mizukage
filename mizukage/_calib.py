@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from shadow._types import CameraId
+from mizukage._types import CameraId
 
 # Name of the hot-pixel record file inside a lightcal directory.
 _HOTPIXEL_REC = "hotpixel.rec"
@@ -47,8 +47,8 @@ def load_hot_pixel_map(calib_dir: Path, camera_id: CameraId) -> np.ndarray | Non
     if not hp_path.exists():
         return None
 
-    from shadow._block import iter_blocks, BlockType
-    import shadow._proto as _proto
+    from mizukage._block import iter_blocks, BlockType
+    import mizukage._proto as _proto
 
     data = hp_path.read_bytes()
     combined: np.ndarray | None = None
@@ -186,8 +186,8 @@ def load_vst_model(calib_dir: Path) -> list[VSTEntry]:
     if not calib_path.exists():
         return []
 
-    from shadow._block import iter_blocks, BlockType
-    import shadow._proto as _proto
+    from mizukage._block import iter_blocks, BlockType
+    import mizukage._proto as _proto
 
     try:
         data = calib_path.read_bytes()
@@ -245,8 +245,8 @@ def load_vignetting_grid(calib_dir: Path, camera_id: CameraId) -> np.ndarray | N
     if not calib_path.exists():
         return None
 
-    from shadow._block import iter_blocks, BlockType
-    import shadow._proto as _proto
+    from mizukage._block import iter_blocks, BlockType
+    import mizukage._proto as _proto
 
     try:
         data = calib_path.read_bytes()
@@ -425,8 +425,8 @@ def load_distortion_params(calib_dir: Path, camera_id: CameraId) -> DistortionPa
     if not calib_path.exists():
         return None
 
-    from shadow._block import iter_blocks, BlockType
-    import shadow._proto as _proto
+    from mizukage._block import iter_blocks, BlockType
+    import mizukage._proto as _proto
 
     try:
         data = calib_path.read_bytes()

@@ -1,24 +1,24 @@
-"""shadow — Light L16 LRI/LRIS camera file reader.
+"""mizukage — Light L16 LRI/LRIS camera file reader.
 
 Quick start::
 
-    import shadow
+    import mizukage
 
-    lri = shadow.open_lri("photo.lri")
+    lri = mizukage.open_lri("photo.lri")
     print(lri.metadata.focal_length_mm)
 
     ref = lri.reference_image
     ref.to_png("reference.png")
 
-    lris = shadow.open_lris("photo.lris")
+    lris = mizukage.open_lris("photo.lris")
     print(lris.depth_map.shape)
 """
-from shadow._debayer import DemosaicKernel
-from shadow._denoise import DenoiseKernel, DenoiseFn, make_tiled_denoiser
-from shadow._lri import LriFile
-from shadow._lris import LrisFile
-from shadow._image import RawImage
-from shadow._types import (
+from mizukage._debayer import DemosaicKernel
+from mizukage._denoise import DenoiseKernel, DenoiseFn, make_tiled_denoiser
+from mizukage._lri import LriFile
+from mizukage._lris import LrisFile
+from mizukage._image import RawImage
+from mizukage._types import (
     AwbGains,
     AwbMode,
     BayerPattern,

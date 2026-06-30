@@ -1,4 +1,4 @@
-"""Compile all .proto files in protobuf/ → shadow/proto/*.py.
+"""Compile all .proto files in protobuf/ → mizukage/proto/*.py.
 
 Run once during initial setup, or after any proto file changes:
     uv run --extra dev python scripts/compile_protos.py
@@ -9,7 +9,7 @@ from pathlib import Path
 
 root = Path(__file__).parent.parent
 proto_dir = root / "protobuf"
-out_dir = root / "shadow" / "proto"
+out_dir = root / "mizukage" / "proto"
 out_dir.mkdir(parents=True, exist_ok=True)
 
 proto_files = sorted(proto_dir.glob("*.proto"))
@@ -44,4 +44,4 @@ init_path.write_text(
 )
 
 print(f"Done. {len(list(out_dir.glob('*_pb2.py')))} _pb2 files written.")
-print("Commit shadow/proto/ to include generated files in the repo.")
+print("Commit mizukage/proto/ to include generated files in the repo.")

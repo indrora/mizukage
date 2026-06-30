@@ -1,20 +1,20 @@
 """Proto-to-types bridge.
 
-This is the only module in shadow that imports from shadow.proto.*.
-It converts raw protobuf objects into shadow._types instances.
+This is the only module in mizukage that imports from mizukage.proto.*.
+It converts raw protobuf objects into mizukage._types instances.
 """
 from __future__ import annotations
 
-# Importing shadow.proto triggers the sys.path patch in shadow/proto/__init__.py
+# Importing mizukage.proto triggers the sys.path patch in mizukage/proto/__init__.py
 # so that all inter-_pb2 flat imports resolve correctly.
-import shadow.proto  # noqa: F401 — side-effect import for sys.path patch
+import mizukage.proto  # noqa: F401 — side-effect import for sys.path patch
 
-from shadow.proto import (
+from mizukage.proto import (
     lightheader_pb2,
     view_preferences_pb2,
     gps_data_pb2,
 )
-from shadow._types import (
+from mizukage._types import (
     AwbGains,
     AwbMode,
     BayerPattern,

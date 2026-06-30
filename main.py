@@ -1,4 +1,4 @@
-from shadow.cli.main import cli
+from mizukage.cli.main import cli
 
 if __name__ == "__main__":
     cli()

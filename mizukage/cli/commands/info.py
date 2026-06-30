@@ -11,9 +11,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-import shadow
-from shadow._block import iter_blocks, BlockType, HEADER_SIZE
-from shadow._types import CameraId
+import mizukage
+from mizukage._block import iter_blocks, BlockType, HEADER_SIZE
+from mizukage._types import CameraId
 
 console = Console()
 
@@ -59,7 +59,7 @@ def _info_lri(path: Path, show_blocks: bool, show_cameras: bool, as_json: bool) 
         _info_lri_json(path)
         return
 
-    lri = shadow.open_lri(str(path))
+    lri = mizukage.open_lri(str(path))
     meta = lri.metadata
 
     # ── Rich table output ──────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ def _info_lri(path: Path, show_blocks: bool, show_cameras: bool, as_json: bool) 
             2: "portrait (top-left)",
             7: "landscape (inverted)",
         }
-        from shadow._types import Orientation
+        from mizukage._types import Orientation
         summary.add_row(
             "Orientation",
             _ORIENT_LABELS.get(meta.orientation.value, meta.orientation.name),
@@ -131,7 +131,7 @@ def _info_lri_json(path: Path) -> None:
     injected alongside the proto payload so callers can locate data in the raw file.
     """
     from google.protobuf.json_format import MessageToDict
-    import shadow._proto as _proto
+    import mizukage._proto as _proto
 
     file_bytes = path.read_bytes()
 
@@ -211,7 +211,7 @@ def _info_lri_json(path: Path) -> None:
     click.echo(json.dumps(out, indent=2))
 
 
-def _print_camera_table(lri: shadow.LriFile) -> None:
+def _print_camera_table(lri: mizukage.LriFile) -> None:
     ref_id = lri.metadata.reference_camera
 
     tbl = Table(title="Camera modules", box=box.SIMPLE_HEAD, show_lines=False)
@@ -281,7 +281,7 @@ def _print_block_table(path: Path) -> None:
 
 
 def _info_lris(path: Path, as_json: bool) -> None:
-    lris = shadow.open_lris(str(path))
+    lris = mizukage.open_lris(str(path))
     dm = lris.depth_map
     lo, hi = lris.disparity_range
 

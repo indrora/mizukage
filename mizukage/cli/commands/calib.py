@@ -48,13 +48,13 @@ def calib(directory: str, as_json: bool) -> None:
 
 def _parse_lri_blocks(path: Path) -> list[Any]:
     """Return a list of parsed LightHeader proto messages from an LELR file."""
-    from shadow._block import iter_blocks
-    import shadow._proto as _proto
+    from mizukage._block import iter_blocks
+    import mizukage._proto as _proto
 
     data = path.read_bytes()
     headers = []
     for block_start, hdr in iter_blocks(data):
-        from shadow._block import BlockType
+        from mizukage._block import BlockType
         if hdr.msg_type != BlockType.LIGHT_HEADER:
             continue
         proto_bytes = data[
@@ -81,9 +81,9 @@ def _parse_hotpixel(path: Path) -> dict[str, dict]:
       [16:20] sensor height (uint32 LE)
       [20:]  zlib-deflated boolean bitmap (1 byte per pixel; 1 = hot)
     """
-    from shadow._block import iter_blocks, BlockType
-    import shadow._proto as _proto
-    from shadow.proto import camera_id_pb2
+    from mizukage._block import iter_blocks, BlockType
+    import mizukage._proto as _proto
+    from mizukage.proto import camera_id_pb2
 
     data = path.read_bytes()
     result: dict[str, dict] = {}
@@ -170,7 +170,7 @@ def _merge_geometry(headers: list) -> dict[str, list[dict]]:
         for mc in lh.module_calibration:
             if not mc.HasField("geometry"):
                 continue
-            from shadow.proto import camera_id_pb2
+            from mizukage.proto import camera_id_pb2
             cam = camera_id_pb2.CameraID.Name(mc.camera_id)
             geo = MessageToDict(mc.geometry, preserving_proto_field_name=True)
             out.setdefault(cam, []).append(geo)
@@ -185,7 +185,7 @@ def _merge_color(headers: list) -> dict[str, list[dict]]:
         for mc in lh.module_calibration:
             if not mc.color:
                 continue
-            from shadow.proto import camera_id_pb2
+            from mizukage.proto import camera_id_pb2
             cam = camera_id_pb2.CameraID.Name(mc.camera_id)
             for cc in mc.color:
                 out.setdefault(cam, []).append(
@@ -202,7 +202,7 @@ def _merge_vignetting(headers: list) -> dict[str, dict]:
         for mc in lh.module_calibration:
             if not mc.HasField("vignetting"):
                 continue
-            from shadow.proto import camera_id_pb2
+            from mizukage.proto import camera_id_pb2
             cam = camera_id_pb2.CameraID.Name(mc.camera_id)
             if cam not in out:
                 out[cam] = MessageToDict(mc.vignetting, preserving_proto_field_name=True)

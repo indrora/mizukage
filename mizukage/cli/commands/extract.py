@@ -10,8 +10,8 @@ import numpy as np
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
-import shadow
-from shadow._types import CameraId
+import mizukage
+from mizukage._types import CameraId
 
 console = Console()
 
