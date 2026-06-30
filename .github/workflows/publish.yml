@@ -1,4 +1,4 @@
-name: "Publish release to PyPI"
+name: "Build and publish"
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
       - name: Install Python 
         run: uv python install
       - name: Local install
-        run: uv install -e .
+        run:  uv pip install -e .
       - name: Check package runs
         run: uv run mizukage --help
   publish:
