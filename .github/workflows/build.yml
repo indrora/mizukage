@@ -1,0 +1,26 @@
+name: Build for CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+        - name: Checkout
+          uses: actions/checkout@v6
+        - name: Install uv
+          uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        - name: Install Python 
+          run: uv python install
+        - name: Local install
+          run: |
+            uv venv
+            uv pip install -e .
+        - name: Check package runs
+          run: uv run mizukage --help
