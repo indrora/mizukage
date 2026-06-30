@@ -9,9 +9,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment:
-      name: pypi
+      name: pypi-publish
     permissions:
-      id-token: write
+      id-token: write 
       contents: read
     steps:
       - name: Checkout
