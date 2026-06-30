@@ -96,10 +96,10 @@ def _on_drag(sender: str | int, app_data: float, user_data) -> None:
         gain = x_data[idx]
         dpg.set_value(
             _TAG_LABEL,
-            f"Gain {gain/100:.2f}×  →  "
-            f"σ_R={xy_r[1][idx]:.4f}  "
-            f"σ_G={xy_g[1][idx]:.4f}  "
-            f"σ_B={xy_b[1][idx]:.4f}",
+            f"Gain {gain/100:1.2f}×  →  "
+            f"σ_R={xy_r[1][idx]:.4g}  "
+            f"σ_G={xy_g[1][idx]:.4g}  "
+            f"σ_B={xy_b[1][idx]:.4g}",
         )
     except Exception:
         pass
@@ -115,10 +115,10 @@ def _update_label(entries: list, wl: float, x: float) -> None:
     try:
         dpg.set_value(
             _TAG_LABEL,
-            f"Gain {e.gain_x100/100:.2f}×  →  "
-            f"σ_R={_sigma(e.r_a,e.r_b,mid,wl):.4f}  "
-            f"σ_G={_sigma(e.g_a,e.g_b,mid,wl):.4f}  "
-            f"σ_B={_sigma(e.b_a,e.b_b,mid,wl):.4f}",
+            f"Gain {e.gain_x100/100:1.2f}×  →  "
+            f"σ_R={_sigma(e.r_a,e.r_b,mid,wl):.4g}  "
+            f"σ_G={_sigma(e.g_a,e.g_b,mid,wl):.4g}  "
+            f"σ_B={_sigma(e.b_a,e.b_b,mid,wl):.4g}",
         )
     except Exception:
         pass
